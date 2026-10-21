@@ -1,0 +1,39 @@
+{
+  "id": "xm-dual-lens-8m",
+  "name": "XiongMai dual-lens 8M (iCSee \"A28\")",
+  "notes": "Everything here was confirmed on the real camera; see docs/DESCOBERTA.md. Read by server/proxy.mjs and by the nevhome app (git submodule).",
+  "match": {
+    "manufacturers": ["XM", "XiongMai", "H264DVR"],
+    "models": ["XM232_X6S-WEQ-H_8M"],
+    "modelPrefixes": ["XM232", "XM530", "XM550"]
+  },
+  "ports": { "onvif": 8899, "rtsp": 554, "http": 80, "dvrip": 34567 },
+  "onvifPath": "/onvif/device_service",
+  "credentials": [["admin", ""], ["admin", "admin"], ["admin", "123456"], ["admin", "tlJwpbo6"]],
+  "streams": {
+    "main": { "profileName": "mainStream", "rtspStream": 0, "size": [3072, 2048] },
+    "sub": { "profileName": "subStream", "rtspStream": 1, "size": [800, 448] },
+    "rtspTemplate": "rtsp://{host}:{rtspPort}/user={user}_password={xmHash}_channel=0_stream={stream}&onvif=0.sdp?real_stream",
+    "prefer": "onvif-GetStreamUri"
+  },
+  "encoderTargets": {
+    "main": { "fps": 20, "bitrate": 4096, "fpsCandidates": [20, 15, 12] },
+    "sub": { "fps": 25, "bitrate": 1024, "fpsCandidates": [25, 20, 15] }
+  },
+  "lenses": {
+    "layout": "stacked-vertical",
+    "count": 2,
+    "names": ["Câmera 1", "Câmera 2"],
+    "singleLensStream": "main",
+    "bothLensesStream": "sub"
+  },
+  "imaging": {
+    "videoSource": "V_SRC_000",
+    "controls": ["Brightness", "Contrast", "ColorSaturation", "Sharpness", "IrCutFilter", "WideDynamicRange", "BacklightCompensation"],
+    "defaults": { "Brightness": 50, "Contrast": 50, "ColorSaturation": 50, "Sharpness": 10, "IrCutFilter": "AUTO", "WideDynamicRange": "OFF" }
+  },
+  "snapshot": { "method": "rtsp-frame", "why": "webcapture.jpg refuses admin auth by query" },
+  "ptz": { "accepted": true, "motor": "unconfirmed (bullet camera, probably fixed)" },
+  "audio": { "microphone": true, "speaker": true, "talkback": "dvrip-34567 (not done)" },
+  "events": ["CellMotionDetector", "TamperEngine"]
+}

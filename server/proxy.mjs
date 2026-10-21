@@ -21,8 +21,13 @@ const FFMPEG = fs.existsSync(LOCAL_FF) ? LOCAL_FF : 'ffmpeg';
 const HAS_FFMPEG = spawnSync(FFMPEG, ['-version']).status === 0;
 const REC_DIR = path.join(process.cwd(), 'server', 'gravacoes');
 
+// Perfil da câmera (profiles/*.json): a fonte única do que sabemos dela, lida também pelo app nevhome.
+const PROFILE = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(HERE, '..', 'profiles', 'xm-dual-lens-8m.json'), 'utf8')); }
+  catch { return {}; }
+})();
 // Credenciais comuns de câmera XM/iCSee, testadas em ordem se a informada falhar.
-const COMMON_CREDS = [['admin', ''], ['admin', 'admin'], ['admin', '123456'], ['admin', 'tlJwpbo6']];
+const COMMON_CREDS = PROFILE.credentials || [['admin', ''], ['admin', 'admin'], ['admin', '123456'], ['admin', 'tlJwpbo6']];
 
 const cam = { addr: null, user: 'admin', pass: '', onvif: null, profiles: [], info: {}, snapUri: null, streamUri: null, videoSource: 'V_SRC_000' };
 
@@ -197,13 +202,13 @@ async function applyBestFps(stream, candidates, bitrate) {
 async function autoOptimize() {
   const results = [];
   if (subProfile() && subProfile() !== mainProfile())
-    results.push(await applyBestFps('sub', [25, 20, 15], 1024));   // fluido
-  results.push(await applyBestFps('main', [20, 15, 12], 4096));    // nítido, sem picotar
+    results.push(await applyBestFps('sub', TARGET.sub.fpsCandidates || [25, 20, 15], TARGET.sub.bitrate));   // fluido
+  results.push(await applyBestFps('main', TARGET.main.fpsCandidates || [20, 15, 12], TARGET.main.bitrate)); // nítido, sem picotar
   return { ok: results.some(r => r.ok), results, profiles: publicState().profiles };
 }
 // Otimiza só se ainda não estiver otimizada. Como o ajuste persiste na câmera, depois da
 // 1ª vez isto vira no-op — a câmera já nasce (reconecta) otimizada, sem botão.
-const TARGET = { main: { fps: 20, bitrate: 4096 }, sub: { fps: 25, bitrate: 1024 } };
+const TARGET = PROFILE.encoderTargets || { main: { fps: 20, bitrate: 4096 }, sub: { fps: 25, bitrate: 1024 } };
 async function maybeOptimize() {
   const m = mainProfile(), s = subProfile();
   const below = (p, t) => p && p.encoding !== 'JPEG' && (+p.fps < t.fps || +p.bitrate < t.bitrate);
