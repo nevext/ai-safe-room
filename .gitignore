@@ -1,0 +1,11 @@
+# binário de terceiros (baixar com server/get-ffmpeg.ps1) — grande demais p/ git
+server/bin/
+# gravações locais e saídas
+server/gravacoes/
+evidence/
+*.log
+# node
+node_modules/
+# SO
+.DS_Store
+Thumbs.db

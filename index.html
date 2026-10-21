@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<title>cam-control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="id">
+      <h1 id="camName">Câmera</h1>
+      <p class="sub"><span class="dot" id="statusDot" data-state="unknown"></span><span id="camAddr">—</span></p>
+    </div>
+    <button id="btnMenu" class="round-btn" aria-label="Menu">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section class="stage" id="stage">
+      <img id="live" alt="Imagem ao vivo da câmera" />
+      <canvas id="overlay"></canvas>
+
+      <div class="hud">
+        <span id="hudFps" class="pill">-- fps</span>
+        <span id="hudRes" class="pill">--</span>
+        <span id="hudMode" class="pill">--</span>
+        <span id="hudDetect" class="pill detect-pill" hidden>IA</span>
+      </div>
+      <button id="btnExpand" class="glass-btn expand" aria-label="Tela cheia">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3"/></svg>
+      </button>
+
+      <!-- PTZ flutua sobre o vídeo, junto com os controles -->
+      <div class="ptz-overlay controls-el" id="ptzOverlay">
+        <button class="pbtn up" data-ptz="up" aria-label="Cima">▲</button>
+        <button class="pbtn left" data-ptz="left" aria-label="Esquerda">◀</button>
+        <button class="pbtn home" data-ptz="home" aria-label="Centro">○</button>
+        <button class="pbtn right" data-ptz="right" aria-label="Direita">▶</button>
+        <button class="pbtn down" data-ptz="down" aria-label="Baixo">▼</button>
+        <button class="pbtn zin" data-ptz="zoom_in" aria-label="Zoom +">＋</button>
+        <button class="pbtn zout" data-ptz="zoom_out" aria-label="Zoom −">－</button>
+      </div>
+
+      <!-- Barra de controles que some sozinha (toque no vídeo mostra/esconde) -->
+      <div class="controls controls-el" id="controls">
+        <div class="seg glass" role="tablist" aria-label="Lente">
+          <button class="seg-item is-active" data-lens="top">Câmera 1</button>
+          <button class="seg-item" data-lens="bottom">Câmera 2</button>
+          <button class="seg-item" data-lens="both">Ambas</button>
+        </div>
+        <div class="bar">
+          <button id="btnSnap" class="glass-btn" aria-label="Foto">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </button>
+          <button id="btnRec" class="glass-btn" data-rec="off" aria-label="Gravar"><b class="rec-dot"></b></button>
+          <button id="btnListen" class="glass-btn" data-on="off" aria-label="Ouvir">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+          </button>
+          <button id="btnImg" class="glass-btn" aria-label="Imagem">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="video-overlay" id="videoOverlay">
+        <div class="spinner"></div>
+        <p id="overlayMsg">Conectando…</p>
+      </div>
+    </section>
+  </main>
+  <audio id="audioEl" hidden></audio>
+
+  <!-- Menu hambúrguer -->
+  <dialog id="menu" class="sheet">
+    <form method="dialog">
+      <div class="grabber"></div>
+      <h2>Menu</h2>
+      <button type="button" class="menu-row" id="miDetect"><span>👁️</span> <span class="mr-label">Detecção de pessoas/animais</span><span class="mr-state" id="detState">desligado</span></button>
+      <button type="button" class="menu-row" id="miQuality"><span>✨</span> <span class="mr-label">Qualidade</span><span class="mr-state" id="qState">automática</span></button>
+      <button type="button" class="menu-row" id="miImg"><span>🎚</span> Ajustes de imagem</button>
+      <button type="button" class="menu-row" id="miSettings"><span>⚙️</span> Configurações</button>
+      <button type="button" class="menu-row" id="miFull"><span>⤢</span> Tela cheia</button>
+      <menu><button value="cancel" class="ghost">Fechar</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="imaging" class="sheet">
+    <form method="dialog">
+      <div class="grabber"></div>
+      <h2>Imagem</h2>
+      <div class="field">
+        <span>Dia / Noite</span>
+        <div class="seg small" id="segDayNight">
+          <button type="button" class="seg-item" data-mode="AUTO">Auto</button>
+          <button type="button" class="seg-item" data-mode="OFF">Dia</button>
+          <button type="button" class="seg-item" data-mode="ON">Noite</button>
+        </div>
+      </div>
+      <label class="row-toggle">WDR (contraluz)<input id="imgWdr" type="checkbox" class="switch"></label>
+      <label class="slider">Brilho <output id="oB">50</output><input id="imgB" type="range" min="0" max="100" value="50"></label>
+      <label class="slider">Contraste <output id="oC">50</output><input id="imgC" type="range" min="0" max="100" value="50"></label>
+      <label class="slider">Saturação <output id="oS">50</output><input id="imgS" type="range" min="0" max="100" value="50"></label>
+      <label class="slider">Nitidez <output id="oN">10</output><input id="imgN" type="range" min="0" max="100" value="10"></label>
+      <menu><button value="cancel" class="primary">Concluir</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="settings" class="sheet">
+    <form method="dialog">
+      <div class="grabber"></div>
+      <h2>Configurações</h2>
+      <label class="stacked">Endereço da câmera<input id="setAddr" type="text" value="192.168.0.41" inputmode="decimal"></label>
+      <div class="two">
+        <label class="stacked">Usuário<input id="setUser" type="text" value="admin" autocomplete="username"></label>
+        <label class="stacked">Senha<input id="setPass" type="password" placeholder="(vazia = padrão)" autocomplete="current-password"></label>
+      </div>
+      <label class="stacked">Proxy (vazio = mesma origem)<input id="setProxy" type="text" placeholder="http://127.0.0.1:8787"></label>
+      <p id="devInfo" class="devinfo"></p>
+      <menu><button value="cancel" class="ghost">Fechar</button><button value="save" id="setSave" class="primary">Salvar</button></menu>
+    </form>
+  </dialog>
+
+  <!-- id usado pela lógica antiga; abre as Configurações -->
+  <button id="btnSettings" hidden></button>
+</div>
+<script src="assets/app.js"></script>
+<!-- IA de detecção (roda no navegador; carregada sob demanda ao ligar a detecção) -->
+<script src="assets/detect.js"></script>
+</body>
+</html>

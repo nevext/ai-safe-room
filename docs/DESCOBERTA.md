@@ -1,0 +1,231 @@
+# cam-control
+
+Reescrita de controle de uma câmera IP Wi-Fi própria (app iCSee, família XiongMai/XM),
+para liberar funcionalidades, tirar a dependência de nuvem/plugin e otimizar o FPS.
+
+> Câmera do próprio usuário. Trabalho local, na rede dele. Nada de ataque a serviço de
+> terceiros. Backup da flash **antes** de qualquer gravação de firmware.
+
+## O alvo
+
+- Produto: "Câmera Segurança IP Externa Wifi A28 App iCSee À Prova D'água".
+- `iCSee` = app padrão de câmeras **XiongMai (XM)**. "A28" é nome genérico de vendedor;
+  o chip (XM530/XM550/HiSilicon) só se confirma com a placa/firmware.
+- Rede do usuário: `192.168.0.0/24`, gateway `192.168.0.1`, PC `192.168.0.33`.
+
+## O que foi OBSERVADO (via REA, por CDP, sem varredura de porta)
+
+Data: 2026-10-20. Ferramenta: REA (`list_browser_targets`, `inspect_web_page`,
+`capture_web_screenshot`) contra o Chrome de depuração (porta 9222) apontado para a
+página da câmera. Quem fez a rede foi o navegador; o REA só leu passivamente.
+
+- Câmera em **`192.168.0.41`** e **`192.168.0.42`** — mesmo MAC `D8-3E-EB-AE-FA-47`
+  (bloco OUI de fabricante de câmera). São o mesmo aparelho.
+- Porta **80** aberta, servindo uma página de título **"Web Viewer"**.
+  - `GET /` → HTML + `css/main.css` + `js/jquery-3.5.0.min.js` (jQuery 3.5.0).
+  - Script inline (sha256 `81927bce…e080e6f`, 429 bytes): carrega
+    `pluginVersion.js?version=<ts>` e depois `js/main.js?version=<version_web>`; dá
+    `alert()` se qualquer um falhar. Padrão clássico do Web Viewer da XM.
+  - Screenshot: **página em branco** no Chrome moderno — o viewer depende de plugin
+    (ActiveX/NPAPI) que não existe mais. Ou seja, hoje a câmera **não entrega vídeo
+    para um navegador comum**. Essa é a primeira "trava" prática (obsolescência).
+- Evidence IDs (REA): target list `ev_eb629d7f…`, inspect salvo em
+  `tool-results/mcp-rea-inspect_web_page-1792537914560.txt`, screenshot `ev_3a967774…`.
+
+## Portas confirmadas (2026-10-20, via `!` powershell TcpClient)
+
+| Porta | Serviço | Estado |
+|-------|---------|--------|
+| 554   | RTSP    | **ABERTA** |
+| 34567 | DVRIP/XM ("sofia") | **ABERTA** |
+| 8899  | ONVIF   | **ABERTA** |
+| 80    | HTTP (Web Viewer) | **ABERTA** |
+| 23    | telnet  | fechada |
+
+**Conclusão:** o vídeo já sai da câmera por RTSP, ONVIF e DVRIP — **sem app e sem
+nuvem**. A "trava" que incomodava (não ver no navegador) era só o Web Viewer de plugin
+obsoleto. Não precisa reescrever firmware para assistir/gravar localmente; basta falar
+o protocolo certo. Telnet fechado: para shell na câmera depois, será por UART/SPI ou
+por brecha conhecida da XM, não por telnet aberto.
+
+## Aparelho confirmado (via ONVIF, 2026-10-20)
+
+- **Modelo**: `XM232_X6S-WEQ-H_8M` (XiongMai, sensor ~8 MP).
+- **Firmware**: `V5.03.C01.000A19WS.10010.346543.S.ONVIF 21.06`.
+- **Login**: `admin` com **senha vazia** (hash XM `tlJwpbo6` = senha em branco). Padrão de
+  fábrica, nunca trocado no app. A interface tem campo de senha caso você troque.
+- ONVIF em `http://192.168.0.41:8899/onvif/device_service` responde GetDeviceInformation,
+  GetProfiles, GetStreamUri, GetSnapshotUri, PTZ e SetVideoEncoderConfiguration.
+
+### Streams (antes → depois da otimização)
+
+| Perfil | Resolução | FPS antes | FPS depois | Bitrate antes → depois |
+|--------|-----------|-----------|------------|------------------------|
+| mainStream (000) | 3072×2048 H264 | 12 | **20** | 1536 → **4096 kbps** |
+| subStream (001)  | 800×448 H264   | 12 | **25** | 512 → **1024 kbps** |
+| snapStream (002) | 800×448 JPEG   | — | — | — |
+
+- **Causa da "queda de FPS"**: os dois streams vinham travados em 12 fps, e o principal
+  com bitrate baixíssimo (1536 kbps p/ 6 MP) → picotava e borrava. O `SetVideoEncoder`
+  via ONVIF com `ForcePersistence` subiu o FPS e o bitrate; a mudança **persiste** na
+  câmera (vale pro app iCSee também, não só pra nossa interface).
+- **Otimização é automática, não tem botão**: o proxy roda `maybeOptimize()` no
+  `/api/connect`. Se algum stream está abaixo do alvo (main 20fps/4096k, sub 25fps/1024k)
+  ele aplica; se já está bom, é no-op. Como persiste, depois da 1ª vez a câmera já
+  reconecta otimizada. Os presets (Máx. FPS / Equilíbrio / Máx. nitidez) continuam para
+  ajuste manual fino.
+- Teto do sensor em resolução cheia fica ~15–20 fps (limite de ISP do chip XM 8M); por
+  isso o principal vai a 20 e o fluido (resolução menor) a 25.
+
+### Vídeo ao vivo
+
+- RTSP: `rtsp://192.168.0.42:554/user=admin_password=tlJwpbo6_channel=0_stream=0&onvif=0.sdp?real_stream`
+  (stream=0 principal, stream=1 fluido). A câmera embute a credencial no próprio URI.
+- Navegador não toca RTSP direto → o `proxy.mjs` transcodifica para **MJPEG** com ffmpeg
+  e a interface consome num `<img>`. Medido: ~25 fps no fluido (sub).
+- **Snapshot HTTP** (`webcapture.jpg`) foi recusado: a câmera responde *"snap no support
+  test user admin, please use other user"* — o endpoint de foto rejeita a auth por query.
+  Contornado: o botão Foto puxa 1 frame via ffmpeg do RTSP.
+
+### ffmpeg
+
+- Não havia ffmpeg na máquina. **Não** foi usado o MSYS2: `pacman -S ffmpeg` exigia um
+  upgrade que quebraria o `gcc` da sua toolchain (dependência `cc-libs` vs `gcc-libs`).
+- Em vez disso, baixei um **ffmpeg estático** (BtbN win64) e deixei só o `.exe` em
+  `server/bin/ffmpeg.exe`. É isolado e reversível (basta apagar a pasta). O proxy usa
+  esse binário local; se um dia houver ffmpeg no PATH, ele também serve.
+
+## Capacidades reais da câmera (confirmadas por ONVIF, 2026-10-20)
+
+`GetCapabilities` + testes diretos (todos responderam sem fault):
+- **PTZ**: 1 nó PTZ; `ContinuousMove` aceito. Mas é bullet — provavelmente fixa (motor
+  inexistente); aceitar o comando ≠ mover. Confirmar olhando a câmera; se fixa, esconder d-pad.
+- **Imaging**: Brightness, Contrast, ColorSaturation, Sharpness, **IrCutFilter** (dia/noite),
+  **WideDynamicRange**, BacklightCompensation. Valores de fábrica: 50/50/50, nitidez 10,
+  IrCut AUTO, WDR OFF. VideoSource token `V_SRC_000`.
+- **Áudio**: microfone (in) e alto-falante (out) presentes. "Ouvir" = RTSP→MP3 via ffmpeg.
+  Falar (back-channel) seria via DVRIP 34567 — não feito ainda.
+- **Events/Analytics**: CellMotionDetector (movimento) + TamperEngine (sabotagem) ativos no
+  firmware. Base para alerta de movimento / gravação por evento.
+
+### Design da interface
+Estilo **player Apple Home + marca nevext.com.br** (2026-10-20):
+- **Vídeo ocupa a tela toda**; tocar nele mostra/esconde os controles (somem após 4s).
+- Botão **expandir** (tela cheia nativa) e **menu ☰** (abre Imagem / Configurações / Tela cheia).
+- Controles flutuam sobre o vídeo: segmentado Nítido/Fluido + ações (Foto, Gravar, Ouvir,
+  Imagem). PTZ flutua por cima. Painéis como bottom sheets iOS.
+- **Identidade nevext**: fonte **Geist** (títulos/corpo) e **Geist Mono** (fps, IP, pills),
+  via Google Fonts. Paleta: azul da marca `#2563eb` + indigo `#4f46e5`, fundos escuros
+  azulados `#0b0e14`/`#101319`, claros `#f8f9fc`/`#fff`, vermelho `#fb2c36`, verde `#00bb7f`.
+  Claro/escuro automático. (Cores/fonte extraídas do site por REA + CSS.)
+Tudo em `index.html` + `assets/app.css`; lógica em `assets/app.js`.
+
+> **Câmera de DUAS LENTES** (corrigido 2026-10-20 após print do usuário): é um aparelho só
+> (1 MAC, 1 fonte ONVIF `V_SRC_000` 3072×2048), mas o firmware **junta as duas lentes num
+> frame único, empilhadas**: lente 1 em cima, lente 2 embaixo (cada uma ~3072×1024, 3:1).
+> O "8M" = 2×4MP. Por isso parecia "dois vídeos cortados".
+>
+> **Solução na interface**: seletor **Câmera 1 / Câmera 2 / Ambas** (no lugar do antigo
+> Nítido/Fluido). "Câmera 1/2" recorta uma lente e preenche a tela (palco vira 3:1, `#live`
+> altura 200% deslizando — ver `.lens-top/.lens-bottom` no CSS). A lente única usa o stream
+> **main (alta resolução)** → cada lente sai nítida (ganho real de qualidade). "Ambas"
+> mostra o frame 3:2 inteiro no stream fluido. A detecção por IA mapeia os quadrados pra
+> metade visível (`window.__lensMode` em `detect.js`).
+>
+> **Qualidade** (menu ☰): auto (lente única=alta, ambas=fluido) / alta / fluido.
+> Upscaling AI por frame ao vivo não é viável no navegador/celular; o ganho vem de usar o
+> stream de alta resolução na lente única.
+
+### Funções expostas na interface
+- Ver ao vivo (Nítido/Fluido), Foto, Gravar (local, `-c copy`), Ouvir (microfone),
+  Imagem (brilho/contraste/saturação/nitidez + WDR + Dia/Noite), PTZ (se houver motor).
+- Otimização automática de FPS/bitrate na conexão.
+- **Detecção por IA no navegador** (menu ☰ → Detecção): TensorFlow.js + COCO-SSD
+  (`lite_mobilenet_v2`), roda localmente, nenhuma imagem sai do aparelho. Desenha quadrados:
+  **verde = pessoa**, **laranja = animal** (gato/cachorro/pássaro/etc.), **vermelho =
+  detectou mas com pouca confiança**. Só pessoa/animais (objetos genéricos ignorados;
+  `showObjects` liga objetos). Arquivos: `assets/detect.js` + `<canvas id=overlay>`. O
+  modelo baixa da CDN na 1ª vez (precisa de internet uma vez; depois fica em cache).
+
+### Endpoints do proxy
+`/api/connect` `/api/state` `/api/stream` `/api/snapshot` `/api/ptz` `/api/encoder`
+`/api/optimize` `/api/record` `/api/imaging` (GET/POST) `/api/daynight` `/api/audio`.
+
+### Próximos possíveis
+- Alerta de movimento (ONVIF PullPoint) + gravação só em evento.
+- Push-to-talk (alto-falante) via DVRIP.
+- Reboot / sync de hora / OSD de data via ONVIF.
+
+## Firmware (OpenIPC / patch) — ainda em aberto
+
+Não é mais urgente: a câmera já faz tudo (ver, PTZ, gravar local, otimizar) sem app e sem
+nuvem, só por ONVIF/RTSP. Reescrever o firmware só valeria para: tirar de vez qualquer
+"ligar pra casa" (telemetria p/ servidor XM), telnet/SSH permanente, ou subir FPS além do
+que o firmware de fábrica deixa. Se formos: backup da flash por SPI/UART **antes**, e
+checar se o chip (XM é bem suportado) entra no OpenIPC.
+
+## Plano
+
+1. **Confirmar portas e protocolo** (RTSP/ONVIF/DVRIP). Keystone — destrava o resto.
+2. **Backup da flash** (SPI/UART) antes de tocar em firmware. Backup = volta garantida.
+3. **Decidir o caminho:**
+   - OpenIPC (se o chip for compatível): firmware aberto, RTSP/ONVIF, sem nuvem. É o
+     "reescrever inteiro e otimizar".
+   - Patch no firmware original (se o chip não for compatível): desligar só as travas.
+4. **Otimizar FPS**: a queda de FPS em câmera XM quase sempre é bitrate/encoder mal
+   configurado (CBR alto, GOP curto, resolução acima do que o sensor entrega a 25/30 fps,
+   smart-codec/H.265 brigando com o decoder). Ajuste via ONVIF/DVRIP ou no firmware novo.
+
+## Entregável deste diretório
+
+- `index.html` + `assets/` — **interface mobile** de controle (live, PTZ, snapshot,
+  gravação, presets de qualidade/FPS, configurações).
+- `server/proxy.mjs` — proxy local que fala com a câmera (RTSP/ONVIF/DVRIP) e expõe uma
+  API HTTP/WS limpa para a interface. A câmera não serve vídeo direto pro navegador, por
+  isso o proxy. Pontos de ligação marcados com `TODO(confirmar-porta)`.
+
+## Como rodar
+
+```
+node server/proxy.mjs            # sobe tudo (UI + API) numa porta só; acha o ffmpeg em server/bin
+```
+Depois é só abrir:
+- PC: `http://127.0.0.1:8787`
+- Celular (mesma rede Wi-Fi): `http://192.168.0.33:8787`
+
+O proxy serve a interface e a API na **porta 8787** (bind em 0.0.0.0 p/ o celular alcançar).
+A interface usa a mesma origem, então não precisa configurar endereço. Login: tenta
+`admin`/senha vazia e padrões XM sozinho; trocou a senha no app? põe no ⚙. Gravações em
+`server/gravacoes/`.
+
+### Testar no celular (passo a passo)
+1. No PC, rodar `node server/proxy.mjs` (deixar a janela aberta).
+2. Celular na **mesma rede Wi-Fi** do PC.
+3. Abrir no navegador do celular: **`http://192.168.0.33:8787`** (IP do PC nesta rede;
+   se o IP mudar, ver com `ipconfig`).
+4. Não abriu? É o **Firewall do Windows** bloqueando o Node. Liberar a porta 8787 (uma vez),
+   em PowerShell como admin:
+   `New-NetFirewallRule -DisplayName "cam-control" -Direction Inbound -Protocol TCP -LocalPort 8787 -Action Allow -Profile Private`
+   (ou, quando o Windows perguntar ao subir o node, marcar "Redes privadas" → Permitir).
+5. A detecção por IA precisa de internet no celular na 1ª vez (baixar o modelo); depois roda offline.
+
+## Verificado end-to-end (2026-10-20)
+
+- [x] Conexão ONVIF (admin/vazio), device info e perfis lidos.
+- [x] Vídeo ao vivo real na interface (MJPEG via ffmpeg) — print em `evidence/interface.png`.
+- [x] Snapshot (`evidence/snapshot-teste.jpg`, 92 KB).
+- [x] Otimização aplicada e persistida: main 12→20 fps/4096k, sub 12→25 fps/1024k.
+- [x] Stream MJPEG medido (~25 fps no sub).
+
+## Status
+
+- [x] Câmera localizada e identificada via REA.
+- [x] Interface mobile completa (live, PTZ, zoom, presets, foto, gravação, áudio, noturno).
+- [x] Proxy ONVIF/RTSP funcionando (sem app, sem nuvem).
+- [x] Portas confirmadas: RTSP 554, DVRIP 34567, ONVIF 8899, HTTP 80.
+- [x] Credencial resolvida (admin / senha vazia).
+- [x] Vídeo ao vivo fora do app.
+- [x] FPS otimizado.
+- [ ] (Opcional) Backup da flash + firmware OpenIPC/patch.
+- [ ] (Próximo) PTZ: confirmar se este modelo tem motor; se for fixa, esconder o d-pad.
+- [ ] (Próximo) Áudio/Noturno: ligar via DVRIP (porta 34567) — hoje são stubs.
