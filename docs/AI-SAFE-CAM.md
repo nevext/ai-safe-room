@@ -105,10 +105,13 @@ Desconto no anual. Fica abaixo de Vivo e Positivo, e com IA, que elas não desta
 
 ## Licença da IA
 
-O YOLO11 usado hoje no camera-ai é **AGPL-3.0**: para produto comercial, exige licença da Ultralytics
-ou abrir todo o código. Para o AI Safe Cam, usar um modelo **Apache 2.0** (uso comercial livre):
-**RF-DETR** (o mais preciso), **D-FINE**, **RT-DETR** ou **YOLOX**. Antes de lançar, conferir a licença no
-repositório de cada um e os termos dos dados de treino.
+O YOLO11 (que o camera-ai usava) é **AGPL-3.0**: para produto comercial, exige licença da Ultralytics
+ou abrir todo o código. Por isso o camera-ai passou a usar o **RF-DETR medium** (Apache 2.0, uso comercial
+livre), em ONNX pronto (`onnx-community/rfdetr_medium-ONNX`, `server/get-rfdetr.ps1`). Medido na câmera de
+teste em 25/10/2026, na RTX 3060: ~45 ms por quadro (o YOLO11s, ~17 ms); na mesma pessoa (só a cabeça atrás do
+monitor) nota 0,51 contra 0,38 do YOLO; nenhum alarme falso em 10 quadros vazios (nem o YOLO). O YOLO11s fica
+só de reserva, se o RF-DETR não estiver baixado. Antes de lançar, conferir de novo a licença no repositório e
+os termos dos dados de treino (COCO).
 
 ## Nome, privacidade e LGPD
 
@@ -120,8 +123,8 @@ repositório de cada um e os termos dos dados de treino.
 
 ## O que já existe e serve de base
 
-- **camera-ai:** conexão única com a câmera (`server/live.mjs`), IA (`server/ai.mjs`: YOLO11s na placa
-  de vídeo ou COCO-SSD), vídeo H.264 em MPEG-TS com a hora de cada imagem, som, dia/noite por horário,
+- **camera-ai:** conexão única com a câmera (`server/live.mjs`), IA (`server/ai.mjs`: RF-DETR na placa
+  de vídeo, YOLO11s ou COCO-SSD de reserva), vídeo H.264 em MPEG-TS com a hora de cada imagem, som, dia/noite por horário,
   API das telas (`/api/screen`), descoberta pela rede (UDP 8788), perfis de câmera.
 - **nevtv (TV):** player com Fluidez (atraso fixo pela hora de cada imagem), quadrados da IA no tempo da
   imagem, informações na tela, painel montado a partir do que o camera-ai lista, modo direto quando o
@@ -138,6 +141,7 @@ repositório de cada um e os termos dos dados de treino.
 2. **Seguir digital** na tela (zoom que acompanha o quadrado da IA) e **escolha automática do vídeo**
    (grande ou pequeno) pelo nível.
 3. **Trocar o modelo de IA** por um Apache 2.0 (RF-DETR ou D-FINE) e medir na câmera de teste.
+   Feito em 25/10/2026: RF-DETR medium (ver "Licença da IA").
 4. **App AI Safe Cam no celular:** conectar câmera, vistoria, ao vivo, avisos; o nevtv como "TV que vigia".
 5. **Conta, planos e teste de 30 dias** (loja de apps), acesso de fora de casa, clipes na nuvem.
 6. **IA na nuvem** e/ou **AI Safe Cam Box** para o 24h de verdade.

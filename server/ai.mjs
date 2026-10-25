@@ -1,10 +1,14 @@
 // camera-ai — a IA roda AQUI, uma vez por câmera, e manda o resultado para todas as telas
 // (TV com nevtv, celular, navegador). Nenhuma imagem sai do PC.
 //
-// Dois detectores, o melhor que estiver disponível:
-//   1. YOLO11s (ONNX Runtime): bem mais preciso. Na placa de vídeo pelo DirectML (~12 ms por quadro numa
-//      RTX 3060), senão no processador (~150 ms). O modelo vem do server/get-yolo.ps1.
-//   2. COCO-SSD lite (TensorFlow.js WASM), o mesmo que rodava no navegador (~75 ms, menos preciso).
+// O melhor detector que estiver disponível:
+//   1. RF-DETR medium (ONNX Runtime, licença Apache 2.0: pode ir num produto). Na placa de vídeo pelo
+//      DirectML (~40 ms por quadro numa RTX 3060). O modelo vem do server/get-rfdetr.ps1. Na câmera de teste
+//      deu nota maior que o YOLO11s à mesma pessoa (0,51 × 0,38, só a cabeça atrás do monitor) e nenhum alarme
+//      falso em 10 quadros vazios.
+//   2. YOLO11s (ONNX Runtime): ~12 ms, mas os pesos são AGPL-3.0 (em casa, tudo bem; num produto, não).
+//      O modelo vem do server/get-yolo.ps1.
+//   3. COCO-SSD lite (TensorFlow.js WASM), o mesmo que rodava no navegador (~75 ms, menos preciso).
 // Sem nenhum dos dois (sem npm install), loadModel() devolve null e o resto segue funcionando sem IA.
 
 import fs from 'node:fs';
@@ -30,18 +34,69 @@ const YOLO_CLASSES = { 0: 'person', 14: 'bird', 15: 'cat', 16: 'dog', 17: 'horse
  * `root` é server/models.
  */
 export async function loadModel(root) {
+  const rfdetr = await loadRfdetr(path.join(root, 'rfdetr_medium')).catch(e => { console.log('RF-DETR:', e.message); return null; });
+  if (rfdetr) return rfdetr;
   const yolo = await loadYolo(path.join(root, 'yolo11s', 'yolo11s.onnx')).catch(e => { console.log('YOLO:', e.message); return null; });
   return yolo || await loadSsd(path.join(root, 'ssdlite_mobilenet_v2'));
+}
+
+async function onnxSession(file) {
+  let ort;
+  try { ort = require('onnxruntime-node'); } catch { return null; }
+  try { return { ort, device: 'gpu', session: await ort.InferenceSession.create(file, { executionProviders: ['dml'], logSeverityLevel: 3 }) }; }
+  catch { return { ort, device: 'cpu', session: await ort.InferenceSession.create(file, { executionProviders: ['cpu'] }) }; }
+}
+
+// ---------- RF-DETR (ONNX Runtime) ----------
+// Saídas no estilo DETR: 300 palpites, cada um com a caixa (cx, cy, w, h em fração) e a nota de cada classe
+// (logits; o índice é o id COCO, 1 = pessoa). Sem NMS em princípio, mas tirar repetidas não custa nada.
+// O quadro entra esticado no quadrado do modelo, sem normalizar (preprocessor_config: do_normalize false,
+// a normalização já está dentro do modelo exportado). Testado com e sem: assim deu as melhores notas.
+const RFDETR_CLASSES = { 1: 'person', 16: 'bird', 17: 'cat', 18: 'dog', 19: 'horse', 20: 'sheep', 21: 'cow', 22: 'elephant', 23: 'bear', 24: 'zebra', 25: 'giraffe' };
+async function loadRfdetr(dir) {
+  const file = path.join(dir, 'model.onnx');
+  if (!fs.existsSync(file)) return null;
+  let size = 576;
+  try { size = JSON.parse(fs.readFileSync(path.join(dir, 'preprocessor_config.json'), 'utf8')).size.height || size; } catch {}
+  const s = await onnxSession(file);
+  if (!s) return null;
+  const { ort, session, device } = s;
+  const input = new Float32Array(3 * size * size), plane = size * size;
+  return {
+    name: 'rf-detr-m', device, unsure: 0.5,
+    async detect(rgb, w, h) {
+      for (let y = 0; y < size; y++) {
+        const sy = Math.floor(y * h / size) * w;
+        for (let x = 0; x < size; x++) {
+          const i = (sy + Math.floor(x * w / size)) * 3, d = y * size + x;
+          input[d] = rgb[i] / 255; input[plane + d] = rgb[i + 1] / 255; input[2 * plane + d] = rgb[i + 2] / 255;
+        }
+      }
+      const out = await session.run({ pixel_values: new ort.Tensor('float32', input, [1, 3, size, size]) });
+      const boxes = out.pred_boxes.data, logits = out.logits.data, [, q, k] = out.logits.dims;
+      const found = [];
+      for (let i = 0; i < q; i++) {
+        let best = -Infinity, cls = -1;
+        for (const c in RFDETR_CLASSES) {
+          const l = logits[i * k + +c];
+          if (l > best) { best = l; cls = +c; }
+        }
+        const score = 1 / (1 + Math.exp(-best));
+        if (score < 0.3) continue;
+        const cx = boxes[i * 4] * w, cy = boxes[i * 4 + 1] * h, bw = boxes[i * 4 + 2] * w, bh = boxes[i * 4 + 3] * h;
+        found.push({ cls, score, x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh });
+      }
+      return nms(found, 0.45).slice(0, 20).map(f => ({ class: RFDETR_CLASSES[f.cls], score: f.score, bbox: [f.x, f.y, f.w, f.h] }));
+    },
+  };
 }
 
 // ---------- YOLO11 (ONNX Runtime) ----------
 async function loadYolo(file) {
   if (!fs.existsSync(file)) return null;
-  let ort;
-  try { ort = require('onnxruntime-node'); } catch { return null; }
-  let session = null, device = 'gpu';
-  try { session = await ort.InferenceSession.create(file, { executionProviders: ['dml'] }); }
-  catch { device = 'cpu'; session = await ort.InferenceSession.create(file, { executionProviders: ['cpu'] }); }
+  const s = await onnxSession(file);
+  if (!s) return null;
+  const { ort, session, device } = s;
   const [, , H, W] = session.inputMetadata?.[0]?.shape || [1, 3, 736, 640];   // exportado com imgsz=(736, 640)
   const input = new Float32Array(3 * H * W);
   const plane = H * W;

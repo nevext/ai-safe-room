@@ -14,8 +14,9 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
 - [x] Ajustes de imagem: brilho, contraste, saturação, nitidez, WDR, **Dia/Noite** (IrCut).
 - [x] Otimização automática de FPS/bitrate na conexão (12→20/25 fps).
 - [x] **Detecção por IA no camera-ai** (pessoa=verde, animal=laranja, incerto=vermelho): roda no
-      PC (`server/ai.mjs`) e vai para todas as telas; o navegador só desenha. YOLO11s na placa de
-      vídeo (~12 ms, 10 análises/s), COCO-SSD de reserva.
+      PC (`server/ai.mjs`) e vai para todas as telas; o navegador só desenha. RF-DETR medium na placa
+      de vídeo (Apache 2.0, ~45 ms, até 10 análises/s; acerta mais que o YOLO11s na câmera de teste), YOLO11s
+      (AGPL) e COCO-SSD de reserva.
 - [ ] **Seguir pessoa (motor validado; falta o teste com alguém andando):** a IA acompanha a pessoa,
       move a lente inferior pelo DVRIP e volta ao preset 1 após 12 s sem detecção (conferido). Direções
       conferidas na câmera (pulso de 450 ms ≈ 1/4 da imagem). Cada movimento vai para o log. Fica
