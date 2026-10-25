@@ -25,8 +25,11 @@
 
   <main>
     <section class="stage" id="stage">
-      <img id="live" alt="Imagem ao vivo da câmera" />
-      <canvas id="overlay"></canvas>
+      <!-- vídeo e quadrados juntos: o zoom que acompanha move os dois -->
+      <div id="zoomBox">
+        <img id="live" alt="Imagem ao vivo da câmera" />
+        <canvas id="overlay"></canvas>
+      </div>
 
       <div class="hud">
         <span id="hudFps" class="pill">-- fps</span>
@@ -84,6 +87,7 @@
       <div class="grabber"></div>
       <h2>Menu</h2>
       <button type="button" class="menu-row" id="miDetect"><span>👁️</span> <span class="mr-label">Detecção de pessoas/animais</span><span class="mr-state" id="detState">desligado</span></button>
+      <button type="button" class="menu-row" id="miAutoZoom"><span>🔍</span> <span class="mr-label">Zoom que acompanha</span><span class="mr-state" id="zoomState">desligado</span></button>
       <button type="button" class="menu-row" id="miFollow"><span>↗</span> <span class="mr-label">Seguir pessoa</span><span class="mr-state">desligado</span></button>
       <button type="button" class="menu-row" id="miVistoria"><span>📶</span> <span class="mr-label">Teste da câmera</span><span class="mr-state" id="vState">…</span></button>
       <button type="button" class="menu-row" id="miQuality"><span>✨</span> <span class="mr-label">Qualidade</span><span class="mr-state" id="qState">automática</span></button>

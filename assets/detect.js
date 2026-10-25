@@ -38,53 +38,110 @@
     return null; // ignora
   }
 
-  function fit(){
-    const r = live.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = r.width * dpr; canvas.height = r.height * dpr;
-    canvas.style.width = r.width + 'px'; canvas.style.height = r.height + 'px';
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    return r;
+  const box = document.getElementById('zoomBox');
+  const zoomRow = document.getElementById('miAutoZoom');
+  const zoomState = document.getElementById('zoomState');
+
+  // Onde a imagem está de verdade dentro do palco: com object-fit cover (uma lente) ela é cortada em
+  // cima e embaixo, e a lente de baixo fica deslocada (top:-100%). Medidas de layout (offset*), que o
+  // zoom (transform) não altera.
+  function geom(){
+    const W = box.offsetWidth, H = box.offsetHeight;
+    const lw = live.offsetWidth, lh = live.offsetHeight;
+    const nw = live.naturalWidth || lw, nh = live.naturalHeight || lh;
+    const fitMode = getComputedStyle(live).objectFit;
+    const s = fitMode === 'cover' ? Math.max(lw / nw, lh / nh) : fitMode === 'contain' ? Math.min(lw / nw, lh / nh) : null;
+    const sx = s ?? lw / nw, sy = s ?? lh / nh;
+    return { W, H, nw, nh, sx, sy, ox: live.offsetLeft + (lw - nw * sx) / 2, oy: live.offsetTop + (lh - nh * sy) / 2 };
   }
 
-  function draw(preds, r){
-    ctx.clearRect(0, 0, r.width, r.height);
-    const nw = live.naturalWidth || r.width, nh = live.naturalHeight || r.height;
-    // Câmera dupla: quando mostra uma lente só, mapeia os quadrados pra metade visível.
+  function fit(){
+    const g = geom();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = g.W * dpr; canvas.height = g.H * dpr;
+    canvas.style.width = g.W + 'px'; canvas.style.height = g.H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return g;
+  }
+
+  function draw(preds, g){
+    ctx.clearRect(0, 0, g.W, g.H);
     const mode = window.__lensMode || 'both';
-    const sx = r.width / nw;
-    const sy = mode === 'both' ? r.height / nh : r.height / (nh / 2);
-    const yOff = mode === 'bottom' ? nh / 2 : 0;
     ctx.lineWidth = 3; ctx.font = '600 14px "Geist Mono", monospace'; ctx.textBaseline = 'top';
+    const people = [];
     for (const p of preds){
       const info = classify(p.class);
       if (!info) continue;                 // só pessoa/animais
-      let [x, y, w, h] = p.bbox;
+      const [x, y, w, h] = p.bbox;
       if (mode !== 'both'){                 // ignora detecções da outra lente
         const cy = y + h / 2;
-        if (mode === 'top' && cy > nh / 2) continue;
-        if (mode === 'bottom' && cy < nh / 2) continue;
+        if (mode === 'top' && cy > g.nh / 2) continue;
+        if (mode === 'bottom' && cy < g.nh / 2) continue;
       }
       const uncertain = p.score < 0.6;
       const color = uncertain ? '#fb2c36' : info.color;
-      const dx = x * sx, dw = w * sx, dy = (y - yOff) * sy, dh = h * sy;
+      const dx = g.ox + x * g.sx, dy = g.oy + y * g.sy, dw = w * g.sx, dh = h * g.sy;
+      if (info.kind === 'person' && !uncertain) people.push({ x: dx, y: dy, w: dw, h: dh, score: p.score });
       ctx.strokeStyle = color; ctx.strokeRect(dx, dy, dw, dh);
       const text = (uncertain ? '? ' : '') + info.label + ' ' + Math.round(p.score * 100) + '%';
       const tw = ctx.measureText(text).width + 12;
       ctx.fillStyle = color; ctx.fillRect(dx - 1.5, Math.max(0, dy - 22), tw, 22);
       ctx.fillStyle = '#fff'; ctx.fillText(text, dx + 4, Math.max(2, dy - 20));
     }
+    autoZoom(people, g);
   }
+
+  // --- Zoom que acompanha (seguir digital): funciona em qualquer câmera, sem motor ---
+  // Amplia em volta das pessoas visíveis e desliza junto. Movimentos pequenos são ignorados (senão a
+  // imagem treme com cada análise); sem ninguém por 3 s, volta à imagem inteira.
+  let zoomOn = false, zoom = { s: 1, tx: 0, ty: 0 }, lastSeen = 0;
+  try { zoomOn = localStorage.getItem('cam-autozoom') === '1'; } catch {}
+  function setZoom(z){
+    zoom = z;
+    box.style.transform = z.s === 1 ? '' : `translate(${z.tx.toFixed(1)}px,${z.ty.toFixed(1)}px) scale(${z.s.toFixed(3)})`;
+  }
+  function autoZoom(people, g){
+    if (!zoomOn) return;
+    const now = Date.now();
+    if (!people.length){
+      if (zoom.s !== 1 && now - lastSeen > 3000) setZoom({ s: 1, tx: 0, ty: 0 });
+      return;
+    }
+    lastSeen = now;
+    // Um retângulo que cabe todas as pessoas, com folga
+    const x0 = Math.min(...people.map(p => p.x)), y0 = Math.min(...people.map(p => p.y));
+    const x1 = Math.max(...people.map(p => p.x + p.w)), y1 = Math.max(...people.map(p => p.y + p.h));
+    const s = Math.max(1, Math.min(3, g.W / ((x1 - x0) * 2.2), g.H / ((y1 - y0) * 1.15)));
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const next = { s, tx: clamp(g.W / 2 - cx * s, g.W - g.W * s, 0), ty: clamp(g.H / 2 - cy * s, g.H - g.H * s, 0) };
+    const moved = Math.hypot(next.tx - zoom.tx, next.ty - zoom.ty) / Math.max(g.W, g.H);
+    if (Math.abs(next.s - zoom.s) < 0.2 && moved < 0.06) return;
+    setZoom(next);
+  }
+  function showZoomState(){
+    zoomState.textContent = zoomOn ? 'ligado' : 'desligado';
+    zoomRow?.classList.toggle('is-active', zoomOn);
+  }
+  showZoomState();
+  zoomRow?.addEventListener('click', async () => {
+    zoomOn = !zoomOn;
+    try { localStorage.setItem('cam-autozoom', zoomOn ? '1' : '0'); } catch {}
+    if (zoomOn && !enabled) await enable();
+    if (!zoomOn) setZoom({ s: 1, tx: 0, ty: 0 });
+    showZoomState();
+    toastFn(zoomOn ? 'Zoom que acompanha ligado: amplia em volta de quem aparecer.' : 'Zoom que acompanha desligado.');
+  });
+  window.__testZoom = (items) => draw(items, fit());   // para testar sem ninguém na frente da câmera
 
   async function loop(){
     if (!enabled) return;
     try {
       if (live.naturalWidth){
-        const r = fit();
         const preds = await model.detect(live, 20, 0.4);
         window.__lastDet = preds.map(p => p.class + ':' + Math.round(p.score * 100)); // debug
         // mostra pessoa, animais e objetos; vermelho quando pouca confiança
-        draw(preds, r);
+        draw(preds, fit());
       }
     } catch {}
     raf = setTimeout(loop, 220); // ~4-5 análises por segundo
@@ -149,8 +206,9 @@
   function disable(){
     enabled = false; clearTimeout(raf);
     stateEl.textContent = 'desligado'; hudDetect.hidden = true;
-    const r = live.getBoundingClientRect(); ctx.clearRect(0, 0, r.width, r.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     canvas.style.display = 'none';
+    setZoom({ s: 1, tx: 0, ty: 0 });   // sem IA não há quem acompanhar
   }
 
   window.__enablePersonDetection = async () => {
@@ -159,5 +217,6 @@
   };
 
   row?.addEventListener('click', () => { enabled ? disable() : enable(); });
+  if (zoomOn) enable();   // o zoom estava ligado da última vez: precisa da IA
   window.addEventListener('resize', () => { if (enabled) fit(); });
 })();

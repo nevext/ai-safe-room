@@ -26,6 +26,10 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       "Testar agora" mede o vídeo grande e o pequeno, 30 s cada, quando a câmera está livre.
 - [x] Reconexão: a sessão DVRIP se refaz sozinha, e se a câmera some ~90 s o camera-ai a procura de
       novo na rede (ela pode voltar com outro IP).
+- [x] **Zoom que acompanha (seguir digital)** no navegador (menu ☰): amplia em volta das pessoas
+      que a IA vê e desliza junto, sem motor (qualquer câmera); volta à imagem inteira após 3 s sem
+      ninguém. Quadrados da IA agora no lugar certo com uma lente só (o corte do object-fit era ignorado).
+      Falta: o mesmo no nevtv e o teste com alguém andando.
 - [x] **API das telas** (`/api/screen`): as TVs com o nevtv mostram a câmera com vídeo nítido, IA e
       os controles que o camera-ai listar; sem o PC, seguem direto da câmera (sem IA).
 - [x] Interface estilo nevext (Geist, azul #2563eb), player com controles que somem,
