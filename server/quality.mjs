@@ -126,13 +126,16 @@ export function tips(s, level) {
 }
 
 /**
- * O nível em segundo plano: avalia a cada 10 s; desce depois de 3 avaliações ruins seguidas (~30 s) e
- * sobe só depois de 10 min sem nenhuma avaliação abaixo do nível novo.
+ * O nível em segundo plano: avalia a cada 10 s; desce depois de 6 avaliações ruins seguidas (~60 s) e
+ * sobe só depois de 10 min sem nenhuma avaliação abaixo do nível novo. 6, e não 3: a janela é de 30 s, então
+ * um engasgo só fica em 3 avaliações seguidas; 6 = ruim em duas janelas diferentes (engasgou mais de uma vez).
  */
-export function createLevel({ riseMs = 10 * 60e3, dropAfter = 3 } = {}) {
+export function createLevel({ riseMs = 10 * 60e3, dropAfter = 6 } = {}) {
   let level = null, badStreak = 0, history = [];   // { at, level }
   return {
     get level() { return level; },
+    /** O teste pedido pela pessoa vale na hora (e daí em diante segue as mesmas regras). */
+    set(l, now = Date.now()) { level = l; badStreak = 0; history = [{ at: now, level: l }]; },
     push(g, now = Date.now()) {
       if (!g) return level;
       history.push({ at: now, level: g.level });

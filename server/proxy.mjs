@@ -633,7 +633,7 @@ async function runVistoria(seconds = 30) {
     const main = result.streams.main?.level, sub = result.streams.sub?.level;
     result.level = main === 3 ? 3 : (main >= 2 || sub >= 2) ? 2 : (main || sub) ? 1 : null;
     quality.test = result;
-    if (result.level) quality.level.push({ level: result.level });
+    if (result.level) quality.level.set(result.level);
     console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria completa: ${result.level ? LEVELS[result.level].pt : 'sem vídeo'}`);
     return result;
   } finally {
