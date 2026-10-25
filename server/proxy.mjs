@@ -499,6 +499,7 @@ function followPulse(dir, why) {
   follow.timer = setTimeout(() => ptz(dir, 'stop', 3).catch(() => {}), 450);
 }
 function resumeFollow() {
+  if (privacy.on) return;
   if (follow.wanted && !follow.enabled && setFollow(true).enabled) console.log('Seguir pessoa: ligado (estava ligado antes)');
   if (clipsOn.wanted) startAi();   // os clipes também precisam da IA olhando
 }
@@ -513,10 +514,11 @@ function setFollow(enabled) {
 }
 function startAi() {
   clearTimeout(ai.idle);
-  if (ai.stop || !ai.model || !live || directWatch.on) return;
+  if (ai.stop || !ai.model || !live || directWatch.on || privacy.on) return;
   ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => {
+    r = ignoreZones(r);
     ai.last = r; updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
-    personArrival(r);
+    arrivals(r);
   } }));
 }
 // Uma TV assistindo direto da câmera: esta câmera só aguenta uma conexão de vídeo (com a segunda, a TV caiu para
@@ -730,6 +732,8 @@ setInterval(() => {
   if (before !== null && now !== before) {
     console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria: ${LEVELS[before].pt} → ${LEVELS[now].pt} (${g.reasons.join('; ') || 'estável'})`);
     perfil?.event('nivel', `${LEVELS[before].pt} → ${LEVELS[now].pt}`, { level: now, reasons: g.reasons });
+    if (now === 1) logActivity('quality', 'Conexão da câmera fraca');
+    else if (before === 1) logActivity('quality', 'Conexão da câmera boa de novo');
   }
   applyVideoPick();
 }, 10000);
@@ -828,8 +832,20 @@ const ACT_DIR = path.join(HERE, 'atividades');
 fs.mkdirSync(ACT_DIR, { recursive: true });
 const ACT_FILE = path.join(ACT_DIR, 'atividades.json');
 let activity = (() => { try { return JSON.parse(fs.readFileSync(ACT_FILE, 'utf8')); } catch { return []; } })();
-async function logActivity(type, text, { thumb = false } = {}) {
-  const entry = { at: Date.now(), type, text, camera: perfil?.data.name || 'Câmera' };
+// Movimentos seguidos (menos de 3 min entre um e outro) viram um evento só, com até quando e quantas vezes
+const GROUPED = new Set(['motion']);
+async function logActivity(type, text, { thumb = false, box = null, label = null } = {}) {
+  if (privacy.on && type !== 'privacy') return;   // modo privacidade: a câmera não olha, nada vira atividade
+  const now = Date.now(), last = activity.at(-1);
+  if (GROUPED.has(type) && last?.type === type && now - (last.until || last.at) < 180000) {
+    last.until = now; last.count = (last.count || 1) + 1;
+    try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
+    return broadcast({ type: 'activity', update: true, ...last });
+  }
+  const entry = { at: now, type, text, camera: perfil?.data.name || 'Câmera' };
+  if (box) entry.box = box;
+  if (label) entry.label = label;
+  if (type === 'person' || type === 'animal') entry.alert = protection.on;   // com a Proteção ligada, avisa no celular
   if (thumb) entry.thumb = await activityThumb();
   activity = [...activity, entry].slice(-500);
   try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
@@ -853,16 +869,91 @@ setInterval(() => {
   for (const f of fs.readdirSync(ACT_DIR)) if (/^\d+\.jpg$/.test(f) && +f.slice(0, -4) < old) fs.rm(path.join(ACT_DIR, f), () => {});
   activity = activity.filter(a => a.at > Date.now() - 30 * 864e5);
 }, 3600e3).unref();
-// Pessoa chegando: a IA vê alguém depois de 2 min sem ninguém (quem fica parado não vira uma atividade atrás da outra)
-const presence = { lastSeen: 0, hits: 0 };
-function personArrival(r) {
-  const person = (r.items || []).some(it => it.kind === 'person' && it.score >= 0.5);
-  if (!person) { presence.hits = 0; return; }
-  const now = Date.now();
-  if (++presence.hits >= 3) {
-    if (now - presence.lastSeen > 120000) logActivity('person', 'Pessoa detectada', { thumb: true });
-    presence.lastSeen = now;
+// Pessoa ou animal chegando: a IA vê depois de 2 min sem ninguém daquele tipo (quem fica parado não vira uma
+// atividade atrás da outra). Leva onde estava (o quadrado) e o que era ("Gato").
+const presence = { person: { lastSeen: 0, hits: 0 }, animal: { lastSeen: 0, hits: 0 } };
+function arrivals(r) {
+  const now = Date.now(), where = perfil?.data.name || 'Câmera';
+  for (const kind of ['person', 'animal']) {
+    const p = presence[kind];
+    const best = (r.items || []).filter(it => it.kind === kind && it.score >= 0.5).sort((a, b) => b.score - a.score)[0];
+    if (!best) { p.hits = 0; continue; }
+    if (++p.hits < 3) continue;
+    if (now - p.lastSeen > 120000) {
+      const name = kind === 'person' ? 'Pessoa' : best.label?.pt || 'Animal';
+      logActivity(kind, `${name} no ${where}`, { thumb: true, box: best.box, label: name });
+    }
+    p.lastSeen = now;
   }
+}
+// Zonas para ignorar (desenhadas no app): o que a IA vê com o centro dentro delas não conta (a TV, o ventilador)
+function ignoreZones(r) {
+  const zones = perfil?.data.zones;
+  if (!zones?.length) return r;
+  const inside = (it) => {
+    const cx = it.box[0] + it.box[2] / 2, cy = it.box[1] + it.box[3] / 2;
+    return zones.some(([x, y, w, h]) => cx >= x && cx <= x + w && cy >= y && cy <= y + h);
+  };
+  return { ...r, items: (r.items || []).filter(it => !inside(it)) };
+}
+
+// ---------- Proteção (o modo ausente) ----------
+// Ligada: pessoa ou animal vira aviso no celular. Desligada (gente em casa): as atividades ficam, sem aviso. Pode
+// ligar e desligar sozinha por horário.
+const protection = (() => {
+  try { return { on: false, schedule: null, ...JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).protection }; } catch { return { on: false, schedule: null }; }
+})();
+function setProtection(on, why = '') {
+  if (protection.on === !!on) return;
+  protection.on = !!on;
+  saveState();
+  logActivity('protection', on ? 'Proteção ativada' : 'Proteção desativada');
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Proteção: ${on ? 'ativada' : 'desativada'}${why ? ' (' + why + ')' : ''}`);
+}
+let protectionTurn = null;
+setInterval(() => {
+  const s = protection.schedule;
+  if (!s?.enabled) return;
+  const now = new Date(), hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  if (hm === protectionTurn) return;
+  if (hm === s.on) { protectionTurn = hm; setProtection(true, 'horário'); }
+  if (hm === s.off) { protectionTurn = hm; setProtection(false, 'horário'); }
+}, 20000).unref();
+
+// ---------- Modo privacidade ----------
+// A câmera cobre a própria imagem (duas capas pretas do AVEnc.VideoWidget: vale para todo mundo, até a TV direto e o
+// iCSee) e o camera-ai para de olhar (sem IA, sem seguir, sem atividades). Conferido em 25/10: a imagem fica preta.
+const privacy = (() => {
+  try { return { on: !!JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).privacy?.on }; } catch { return { on: false }; }
+})();
+async function applyCovers(on) {
+  const name = 'AVEnc.VideoWidget.[0]';
+  const session = await dvrSession();
+  const cur = (await session.request(1042, { Name: name }))[name];
+  if (!cur?.Covers?.length) throw new Error('esta câmera não tem capa de privacidade');
+  const cover = (c, pos) => ({ ...c, EncodeBlend: on, PreviewBlend: on, BackColor: on ? '0xFF000000' : '0x40000000',
+    RelativePos: on ? pos : [1024, 1024, 2048, 2048] });
+  cur.Covers[0] = cover(cur.Covers[0], [0, 0, 8192, 8192]);
+  if (cur.Covers[1]) cur.Covers[1] = cover(cur.Covers[1], [4096, 0, 8192, 8192]);   // a primeira não chega na borda direita
+  const r = await session.request(1040, { Name: name, [name]: cur });
+  if (Number(r.Ret) !== 100) throw new Error('a câmera recusou (' + r.Ret + ')');
+}
+async function setPrivacy(on) {
+  on = !!on;
+  try { await applyCovers(on); } catch (e) { return { ok: false, error: e.message }; }
+  if (on) logActivity('privacy', 'Modo privacidade ligado');
+  privacy.on = on;
+  saveState();
+  if (on) {
+    if (ai.stop) { ai.stop(); ai.stop = null; }
+    follow.enabled = false;
+  } else {
+    logActivity('privacy', 'Modo privacidade desligado');
+    resumeFollow();
+    if (follow.enabled || clipsOn.wanted || ai.listeners.size) startAi();
+  }
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Modo privacidade: ${on ? 'ligado (imagem coberta)' : 'desligado'}`);
+  return { ok: true };
 }
 // A foto pequena da câmera para as listas: o snapshot da câmera demora ~7 s, então fica uma pronta (320 px), servida
 // na hora e renovada por trás quando tem mais de 1 min
@@ -1064,7 +1155,7 @@ const CAP_INFO = {
 function perfilInfo() {
   if (!perfil) return { ok: false, error: 'sem câmera' };
   const p = perfil.data;
-  return { ok: true, name: p.name || 'Câmera', kind: PROFILE.name || null, serial: p.serial, model: p.model, firmware: p.firmware, firstSeen: p.firstSeen, running: fullVistoria.running,
+  return { ok: true, name: p.name || 'Câmera', zones: p.zones || [], kind: PROFILE.name || null, serial: p.serial, model: p.model, firmware: p.firmware, firstSeen: p.firstSeen, running: fullVistoria.running,
     caps: Object.entries(CAP_LABELS).filter(([id]) => p.caps[id]).map(([id, label]) => ({ id, label, ...CAP_INFO[id], ...p.caps[id] })),
     history: p.history.slice(-50).reverse() };
 }
@@ -1097,6 +1188,8 @@ async function screenInfo() {
     controls: await screenControls().catch(() => []),
     motion: { active: motionWatch.active, last: motion.last },
     events: clips ? { list: '/api/events', recording: clipsOn.wanted } : null,
+    protection: { on: protection.on, schedule: protection.schedule },
+    privacy: { on: privacy.on },
     quality: { level: quality.level.level, label: quality.level.level ? LEVELS[quality.level.level] : null, bufferMs: bufferMs(), vistoria: '/api/vistoria' },
   };
 }
@@ -1197,11 +1290,37 @@ function newAccess(password, announce) {
   return a;
 }
 const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+// Cada aparelho que entra (pela senha ou pelo Permitir) ganha a própria chave: dá para ver quem tem acesso e tirar um
+// só. A chave antiga (access.key) continua valendo para quem entrou antes disto.
+access.devices ??= [];
+function newDevice(name) {
+  const d = { id: crypto.randomBytes(6).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), key: crypto.randomBytes(24).toString('hex'), at: Date.now(), lastSeen: Date.now() };
+  access.devices.push(d);
+  saveState();
+  return d;
+}
+function knownKey(k) {
+  if (same(k, access.key)) return true;
+  const d = access.devices.find(d => same(k, d.key));
+  if (d && Date.now() - d.lastSeen > 600000) { d.lastSeen = Date.now(); saveState(); }
+  return !!d;
+}
+function devicesInfo() {
+  return { ok: true, devices: access.devices.map(({ id, name, at, lastSeen }) => ({ id, name, at, lastSeen })) };
+}
+function removeDevice(id) {
+  const n = access.devices.length;
+  access.devices = access.devices.filter(d => d.id !== String(id));
+  if (access.devices.length === n) return { ok: false, error: 'aparelho não encontrado' };
+  saveState();
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Acesso de um aparelho removido`);
+  return { ok: true, ...devicesInfo() };
+}
 const passwordOk = (password) => same(crypto.scryptSync(String(password ?? ''), access.salt, 32).toString('hex'), access.hash);
 function setPassword(password) {
   password = String(password ?? '');
   if (password.length < 4) return { ok: false, error: 'a senha precisa de pelo menos 4 caracteres' };
-  Object.assign(access, newAccess(password, false));
+  Object.assign(access, newAccess(password, false), { devices: [] });
   saveState();
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Senha do camera-ai trocada: todos os aparelhos entram de novo`);
   return { ok: true, key: access.key };
@@ -1217,7 +1336,7 @@ function fromThisPc(req) {
 const cookieKey = (req) => /(?:^|;\s*)camkey=([0-9a-f]+)/.exec(req.headers.cookie || '')?.[1];
 // Errou a senha 5 vezes: aquele aparelho espera 1 minuto
 const tries = new Map();
-function login(req, res, password) {
+function login(req, res, password, name) {
   const ip = req.socket.remoteAddress, t = tries.get(ip) || { n: 0, until: 0 };
   if (Date.now() < t.until) return json(res, 429, { ok: false, error: 'muitas tentativas; espere 1 minuto' });
   if (!passwordOk(password)) {
@@ -1227,8 +1346,9 @@ function login(req, res, password) {
     return json(res, 401, { ok: false, error: 'senha errada' });
   }
   tries.delete(ip);
-  res.setHeader('set-cookie', `camkey=${access.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
-  return json(res, 200, { ok: true, key: access.key });
+  const d = newDevice(name || 'Navegador');
+  res.setHeader('set-cookie', `camkey=${d.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
+  return json(res, 200, { ok: true, key: d.key });
 }
 // Pedido de acesso: a TV (ou um celular sem a senha) pede, e quem já entrou toca em Permitir no navegador.
 // Ninguém precisa saber a senha. Um pedido por aparelho, vale 10 min.
@@ -1245,7 +1365,7 @@ function accessRequest(req, name) {
 function accessStatus(id) {
   const r = requests.get(String(id));
   if (!r || Date.now() - r.at > 600000) return { status: 'gone' };
-  if (r.status === 'ok') { requests.delete(r.id); return { status: 'ok', key: access.key }; }
+  if (r.status === 'ok') { requests.delete(r.id); return { status: 'ok', key: newDevice(r.name).key }; }
   return { status: r.status };
 }
 function accessAnswer(id, allow) {
@@ -1273,7 +1393,7 @@ f.onsubmit=async ev=>{ev.preventDefault();const r=await fetch('/api/login',{meth
 const d=await r.json().catch(()=>({}));if(d.ok)location.reload();else e.textContent=d.error||'não deu';};</script></body></html>`;
 
 function saveState() {
-  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, clips: clipsOn.wanted, video: videoPick.choice, access })); } catch {}
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, clips: clipsOn.wanted, video: videoPick.choice, access, protection, privacy })); } catch {}
 }
 setImmediate(saveState);   // a senha nova (primeira vez) fica guardada já, depois que tudo acima e abaixo existe
 
@@ -1384,7 +1504,7 @@ const server = http.createServer(async (req, res) => {
     // A TV põe a chave no começo do endereço: /k/<chave>/api/...
     const prefixed = /^\/k\/([0-9a-f]+)(\/.*)$/.exec(u.pathname);
     if (prefixed) u.pathname = prefixed[2];
-    if (u.pathname === '/api/login' && req.method === 'POST') return login(req, res, (await readBody(req)).password);
+    if (u.pathname === '/api/login' && req.method === 'POST') { const b = await readBody(req); return login(req, res, b.password, b.name); }
     if (u.pathname === '/api/access/request' && req.method === 'POST') return json(res, 200, accessRequest(req, (await readBody(req)).name));
     if (u.pathname === '/api/screen/direct' && req.method === 'POST') return json(res, 200, setDirectWatch(!!(await readBody(req)).watching));
     if (u.pathname === '/api/access/status') {
@@ -1392,7 +1512,7 @@ const server = http.createServer(async (req, res) => {
       if (r.key) res.setHeader('set-cookie', `camkey=${r.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
       return json(res, 200, r);
     }
-    if (!fromThisPc(req) && !same(prefixed?.[1], access.key) && !same(cookieKey(req), access.key) && !same(req.headers['x-key'], access.key)) {
+    if (!fromThisPc(req) && !knownKey(prefixed?.[1]) && !knownKey(cookieKey(req)) && !knownKey(req.headers['x-key'])) {
       if (u.pathname.startsWith('/api/')) return json(res, 401, { error: 'senha', login: '/api/login' });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       return res.end(LOGIN_PAGE);
@@ -1414,11 +1534,29 @@ const server = http.createServer(async (req, res) => {
       }
       case '/api/perfil': {
         // O nome que a pessoa dá à câmera ("Quarto")
-        if (req.method === 'POST') { const b = await readBody(req); if (perfil && b.name) { perfil.data.name = String(b.name).slice(0, 40); perfil.save(); } }
+        if (req.method === 'POST') {
+          const b = await readBody(req);
+          if (perfil && b.name) perfil.data.name = String(b.name).slice(0, 40);
+          // Zonas para ignorar: retângulos [x, y, l, a] de 0 a 1 na imagem inteira
+          if (perfil && Array.isArray(b.zones)) perfil.data.zones = b.zones.slice(0, 8)
+            .map(z => z.slice(0, 4).map(n => Math.max(0, Math.min(1, +n || 0)))).filter(z => z[2] > 0.01 && z[3] > 0.01);
+          perfil?.save();
+        }
         return json(res, 200, perfilInfo());
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
       case '/api/screen/thumb': return serveCameraThumb(res);
+      case '/api/protection': {
+        if (req.method === 'POST') {
+          const b = await readBody(req);
+          if (b.on != null) setProtection(b.on, 'pedido');
+          if (b.schedule !== undefined) { protection.schedule = b.schedule; saveState(); }
+        }
+        return json(res, 200, { ok: true, ...protection });
+      }
+      case '/api/privacy': return json(res, 200, req.method === 'POST' ? await setPrivacy((await readBody(req)).on) : { ok: true, ...privacy });
+      case '/api/devices': return json(res, 200, devicesInfo());
+      case '/api/devices/remove': return json(res, 200, removeDevice((await readBody(req)).id));
       case '/api/perfil/vistoria': return json(res, 200, await runFullVistoria());
       case '/api/access/pending': return json(res, 200, { requests: pendingRequests() });
       case '/api/access/answer': { const b = await readBody(req); return json(res, 200, accessAnswer(b.id, !!b.allow)); }
