@@ -176,6 +176,7 @@ aparelho, basta adicionar uma.
 | Câmera 1 / Câmera 2 / Ambas | Mostrar: metade de cima / de baixo / inteira | recorte local (TextureView), lembrado por câmera |
 | Ouvir | Som ligado/desligado | o áudio G711 já vem no RTSP |
 | Dia/Noite | Automático / Dia / Noite | `IrCutFilter` AUTO / ON / OFF |
+| Seguir pessoa | Ligado/desligado (camera-ai conectado) | IA na lente fixa, movimento DVRIP e retorno ao preset 1 |
 | Imagem | Brilho, Contraste, Cor, Nitidez, Contraluz (WDR) | `SetImagingSettings` com `ForcePersistence` (vale pro iCSee e pro proxy também) |
 
 Os limites vêm do `GetOptions` (nesta câmera: 0–100, e nitidez 0–15). O serviço de imagem é
@@ -279,6 +280,11 @@ sensor filma a ~12 fps. As duas mudanças foram desfeitas (`LowLuxMode 1`, `Most
   e com a lente inclinada esquerda/direita saem invertidas na imagem.
 - `NetWork.Wifi` devolve a **senha do Wi-Fi em texto** para quem logar com a senha vazia: pôr senha
   na câmera (o camera-ai e a TV aceitam login).
+- **Seguir pessoa (camera-ai):** opção no menu do navegador e no painel da TV. A IA usa as detecções da lente fixa (parte de cima) e
+  dá pulsos horizontais curtos na lente móvel pelo DVRIP; ao ficar 12 s sem pessoa, manda `GotoPreset` 1. O recurso
+  exige IA do servidor, stream de análise e DVRIP; não altera a configuração do rastreamento de fábrica. A direção
+  horizontal usa a inversão observada neste aparelho. Implementação concluída, pendente validação ao vivo.
+
 
 **Firmware aberto (OpenIPC):** para XiongMai compatíveis existe o *Coupler*, instalado pelo botão de
 atualização da própria câmera, **sem abrir**. Mas: voltar ao original só por UART (aí sim abrindo); o

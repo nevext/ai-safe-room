@@ -153,6 +153,11 @@
     canvas.style.display = 'none';
   }
 
+  window.__enablePersonDetection = async () => {
+    if (!enabled) await enable();
+    return enabled && await serverAi();
+  };
+
   row?.addEventListener('click', () => { enabled ? disable() : enable(); });
   window.addEventListener('resize', () => { if (enabled) fit(); });
 })();

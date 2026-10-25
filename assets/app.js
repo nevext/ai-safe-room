@@ -194,6 +194,18 @@ document.querySelectorAll('#segDayNight .seg-item').forEach(b => b.onclick = () 
 // --- Wiring ---
 document.querySelectorAll('.seg-item[data-lens]').forEach(b => b.onclick = () => selectLens(b.dataset.lens));
 $('#miQuality')?.addEventListener('click', cycleQuality);
+$('#miFollow')?.addEventListener('click', async function(){
+  const enabled = this.classList.contains('is-active');
+  try {
+    if (!enabled && window.__enablePersonDetection && !(await window.__enablePersonDetection()))
+      throw new Error('A IA do servidor não está disponível.');
+    const state = await api('/api/follow', { method:'POST', body: JSON.stringify({ enabled: !enabled }) });
+    this.classList.toggle('is-active', state.enabled);
+    this.querySelector('.mr-state').textContent = state.enabled ? 'ligado' : 'desligado';
+    if (!state.enabled && state.reason) throw new Error(state.reason);
+    toast(state.enabled ? 'Seguir pessoa ligado. Volta ao preset 1 após 12 s sem detecção.' : 'Seguir pessoa desligado.');
+  } catch (e) { toast('Não foi possível seguir: ' + e.message); }
+});
 $('#btnListen').onclick = (e) => toggleListen(e.currentTarget);
 $('#btnImg').onclick = openImaging;
 document.querySelectorAll('[data-ptz]').forEach(b => {

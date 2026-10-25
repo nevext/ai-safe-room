@@ -16,6 +16,7 @@ import dgram from 'node:dgram';
 import os from 'node:os';
 import { loadModel, analyzer } from './ai.mjs';
 import { createLive, keyframeAt } from './live.mjs';
+import { dvrip } from './dvrip.mjs';
 
 const PORT = 8787;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -33,7 +34,7 @@ const LIVE_IN = ['-fflags', 'nobuffer', '-flags', 'low_delay', '-probesize', '50
 const H264 = (() => {
   if (!HAS_FFMPEG) return null;
   const tries = [
-    ['h264_nvenc', '-preset', 'p1', '-tune', 'ull', '-zerolatency', '1', '-rc', 'cbr'],
+    ['h264_nvenc', '-preset', 'p4', '-tune', 'll', '-zerolatency', '1', '-rc', 'cbr'],   // p4/ll: mais qualidade, ainda sem atraso perceptível
     ['h264_qsv', '-preset', 'veryfast', '-low_power', '1'],
     ['h264_amf', '-usage', 'ultralowlatency', '-quality', 'speed'],
     ['libx264', '-preset', 'ultrafast', '-tune', 'zerolatency'],
@@ -84,7 +85,8 @@ const PROFILE = (() => {
 // Credenciais comuns de câmera XM/iCSee, testadas em ordem se a informada falhar.
 const COMMON_CREDS = PROFILE.credentials || [['admin', ''], ['admin', 'admin'], ['admin', '123456'], ['admin', 'tlJwpbo6']];
 
-const cam = { addr: null, user: 'admin', pass: '', onvif: null, profiles: [], info: {}, snapUri: null, streamUri: null, videoSource: 'V_SRC_000' };
+const cam = { addr: null, user: 'admin', pass: '', onvif: null, dvr: null, ptzDir: null, profiles: [], info: {}, snapUri: null, streamUri: null, videoSource: 'V_SRC_000' };
+const follow = { enabled: false, lastMove: 0, lostAt: 0, returned: false, searchPulses: 0, hitFrames: 0, timer: null };
 
 // ---------- helpers HTTP ----------
 const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
@@ -127,6 +129,7 @@ async function connect(addr, user, pass) {
     const info = await soap(null, `<tds:GetDeviceInformation/>`, u, p);
     if (info.ok && /Manufacturer/i.test(info.text)) {
       cam.user = u; cam.pass = p;
+      cam.dvr?.close(); cam.dvr = await dvrip(addr, u, p).catch(e => { console.log('DVRIP indisponível:', e.message); return null; });
       cam.info = {
         manufacturer: tag(info.text, 'Manufacturer'), model: tag(info.text, 'Model'),
         firmware: tag(info.text, 'FirmwareVersion'), serial: tag(info.text, 'SerialNumber'),
@@ -213,7 +216,33 @@ function ffmpegFrame(rtsp) {
 }
 
 // ---------- PTZ (ONVIF) ----------
-async function ptz(dir, action) {
+async function dvrPtz(command, preset, step = 5) {
+  if (!cam.dvr) throw new Error('Controle pelo DVRIP indisponível');
+  const reply = await cam.dvr.request(1400, { Name: 'OPPTZControl', OPPTZControl: {
+    Channel: 0, Command: command, Parameter: {
+      AUX: { Number: 0, Status: 'On' }, Channel: 0, MenuOpts: 'Enter', Pattern: 'Start',
+      Preset: preset, Step: step, Tour: 0,
+    },
+  } });
+  if (![100, 150, 515].includes(Number(reply.Ret))) throw new Error('Comando PTZ recusado (' + (reply.Ret ?? 'sem código') + ')');
+  return reply;
+}
+async function ptz(dir, action, step = 5) {
+  if (cam.dvr) {
+    if (dir === 'home') {
+      if (cam.ptzDir) await dvrPtz(cam.ptzDir, -1).catch(() => {});
+      cam.ptzDir = null;
+      return dvrPtz('GotoPreset', 1);
+    }
+    if (action === 'stop') {
+      const command = cam.ptzDir;
+      cam.ptzDir = null;
+      if (command) await dvrPtz(command, -1);
+      return;
+    }
+    const command = { left: 'DirectionRight', right: 'DirectionLeft', up: 'DirectionUp', down: 'DirectionDown' }[dir];
+    if (command) { cam.ptzDir = command; return dvrPtz(command, 65535, step); }
+  }
   const token = mainProfile()?.token; if (!token) return;
   if (action === 'stop' || dir === 'home') {
     await soap(null, `<tptz:Stop><tptz:ProfileToken>${token}</tptz:ProfileToken><tptz:PanTilt>true</tptz:PanTilt><tptz:Zoom>true</tptz:Zoom></tptz:Stop>`);
@@ -379,14 +408,66 @@ async function loadAi() {
 }
 
 // Analisa só enquanto alguma tela está assistindo.
+function updateFollow(result) {
+  if (!follow.enabled || !cam.dvr) return;
+  const people = (result.items || []).filter(it => it.kind === 'person' && it.score >= 0.4);
+  const bottom = people.filter(it => it.box[1] + it.box[3] / 2 >= 0.5).sort((a, b) => b.score - a.score)[0];
+  const top = people.filter(it => it.box[1] + it.box[3] / 2 < 0.5).sort((a, b) => b.score - a.score)[0];
+  const now = Date.now();
+
+  // A detecção na metade inferior vem da lente que gira: use-a como feedback fechado. A lente fixa pode
+  // ver a pessoa deslocada mesmo quando a móvel já está apontada corretamente.
+  if (bottom) {
+    follow.hitFrames++;
+    follow.lostAt = 0; follow.returned = false; follow.searchPulses = 0;
+    const centerX = bottom.box[0] + bottom.box[2] / 2;
+    const centerY = (bottom.box[1] + bottom.box[3] / 2 - 0.5) * 2;
+    const dir = centerX < 0.38 ? 'left' : centerX > 0.62 ? 'right'
+      : centerY < 0.34 ? 'up' : centerY > 0.66 ? 'down' : null;
+    if (!dir || follow.hitFrames < 3 || now - follow.lastMove < 1200) return;
+    follow.lastMove = now;
+    ptz(dir, 'start', 3).catch(e => console.log('Rastreamento PTZ:', e.message));
+    clearTimeout(follow.timer);
+    follow.timer = setTimeout(() => ptz(dir, 'stop', 3).catch(() => {}), 450);
+    return;
+  }
+
+  follow.hitFrames = 0;
+  if (!follow.lostAt) follow.lostAt = now;
+  // If the moving lens lost the person but the fixed lens still sees them, search with at most three
+  // short, spaced pulses. Do not keep driving toward a stale coordinate.
+  if (top && follow.searchPulses < 3 && now - follow.lostAt >= 2500 && now - follow.lastMove >= 2200) {
+    const centerX = top.box[0] + top.box[2] / 2;
+    const dir = centerX < 0.38 ? 'left' : centerX > 0.62 ? 'right' : null;
+    if (dir) {
+      follow.searchPulses++;
+      follow.lastMove = now;
+      ptz(dir, 'start', 3).catch(e => console.log('Rastreamento PTZ:', e.message));
+      clearTimeout(follow.timer);
+      follow.timer = setTimeout(() => ptz(dir, 'stop', 3).catch(() => {}), 450);
+    }
+  }
+  if (!follow.returned && now - follow.lostAt >= 12000 && now - follow.lastMove >= 1000) {
+    follow.returned = true; follow.lastMove = now;
+    ptz('home', 'start').catch(e => console.log('Rastreamento: retorno ao preset falhou:', e.message));
+  }
+}
+function setFollow(enabled) {
+  follow.enabled = !!enabled && !!cam.dvr && !!ai.model && !!live;
+  follow.lastMove = 0; follow.lostAt = 0; follow.returned = false; follow.searchPulses = 0; follow.hitFrames = 0;
+  clearTimeout(follow.timer); follow.timer = null;
+  if (!follow.enabled && cam.ptzDir) ptz('left', 'stop').catch(() => {});
+  if (follow.enabled) startAi(); else stopAiSoon();
+  return { enabled: follow.enabled, available: !!cam.dvr && !!ai.model && !!live, reason: !cam.dvr ? 'DVRIP indisponível' : !ai.model ? 'IA indisponível' : !live ? 'Análise de vídeo indisponível' : null };
+}
 function startAi() {
   clearTimeout(ai.idle);
   if (ai.stop || !ai.model || !live) return;
-  ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => { ai.last = r; broadcast({ type: 'detections', ...r }); } }));
+  ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => { ai.last = r; updateFollow(r); broadcast({ type: 'detections', ...r }); } }));
 }
 function stopAiSoon() {
   clearTimeout(ai.idle);
-  ai.idle = setTimeout(() => { if (!ai.listeners.size && ai.stop) { ai.stop(); ai.stop = null; } }, 10000);
+  ai.idle = setTimeout(() => { if (!ai.listeners.size && !follow.enabled && ai.stop) { ai.stop(); ai.stop = null; } }, 10000);
 }
 function broadcast(event) {
   const line = JSON.stringify(event) + '\n';
@@ -425,6 +506,7 @@ async function screenControls() {
     level('saturation', 'ColorSaturation', L('Cor', 'Color'), s.saturation),
     level('sharpness', 'Sharpness', L('Nitidez', 'Sharpness'), s.sharpness),
     ...(s.wdr ? [{ id: 'wdr', type: 'toggle', label: L('Contraluz (WDR)', 'Backlight (WDR)'), value: s.wdr === 'ON' }] : []),
+    ...(PROFILE.ptz?.personFollow ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
   ];
 }
 
@@ -441,10 +523,15 @@ async function screenControl(id, value) {
     contrast: () => setImaging({ contrast: +value }),
     saturation: () => setImaging({ saturation: +value }),
     sharpness: () => setImaging({ sharpness: +value }),
+    follow: () => {
+      const state = setFollow(!!value);
+      return state.enabled === !!value ? { ok: true } : { ok: false, error: state.reason || 'Seguir pessoa indisponível' };
+    },
   }[id];
   if (!set) return { ok: false, error: 'controle desconhecido: ' + id };
   const r = await set();
-  return { ok: r.ok, controls: await screenControls() };
+  if (!r.ok) return { ok: false, error: r.error || 'não foi possível alterar o controle' };
+  return { ok: true, controls: await screenControls() };
 }
 
 async function screenInfo() {
@@ -634,6 +721,7 @@ const server = http.createServer(async (req, res) => {
       case '/api/stream':  if (!HAS_FFMPEG) return json(res, 501, { error: 'sem ffmpeg; use snapshot' }); return startStream(res, u.searchParams.get('stream') || 'sub');
       case '/api/snapshot': { const buf = await snapshot(); res.writeHead(200, { 'content-type': 'image/jpeg', ...cors }); return res.end(buf); }
       case '/api/ptz':     { const b = await readBody(req); await ptz(b.dir, b.action); return json(res, 200, { ok: true }); }
+      case '/api/follow':  { const b = req.method === 'GET' ? {} : await readBody(req); return json(res, 200, req.method === 'GET' ? { enabled: follow.enabled, available: !!cam.dvr && !!ai.model && !!live } : setFollow(b.enabled)); }
       case '/api/encoder': { const b = await readBody(req); return json(res, 200, await applyEncoder(b)); }
       case '/api/optimize': return json(res, 200, await autoOptimize());
       case '/api/record':  { const b = await readBody(req); return json(res, 200, toggleRecord(b.on)); }

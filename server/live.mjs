@@ -121,7 +121,7 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
         + `;[sa]fps=${aiFps},scale=${ai[0]}:${ai[1]}[oa]`;
       const args = ['-loglevel', 'error', ...inputArgs, '-i', url, '-filter_complex', graph];
       views.forEach((v, i) => args.push('-map', `[o${i}]`, '-c:v', encoder.name, ...encoder.opts, '-profile:v', 'main', '-bf', '0',
-        '-g', '30', '-b:v', '4M', '-maxrate', '4M', '-bufsize', '1M', '-bsf:v', 'dump_extra',
+        '-g', '30', '-b:v', '6M', '-maxrate', '6M', '-bufsize', '2M', '-bsf:v', 'dump_extra',
         '-f', 'mpegts', '-mpegts_flags', '+resend_headers', '-muxdelay', '0', '-muxpreload', '0',
         `tcp://127.0.0.1:${servers[i].address().port}`));
       args.push('-map', '[oa]', '-f', 'rawvideo', '-pix_fmt', 'rgb24', `tcp://127.0.0.1:${servers[views.length].address().port}`);
@@ -134,10 +134,11 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
         ff = null;
         for (const s of servers) s.close();
         servers = [];
-        if (code) console.log(`vídeo ao vivo parou (${code}): ${errors.trim()}`);
+        // Sempre com a hora: é por aqui que se descobre quando e por que a câmera derruba a conexão
+        console.log(`${new Date().toLocaleTimeString('pt-BR')} vídeo ao vivo parou (código ${code}): ${errors.trim() || 'a câmera fechou a conexão'}`);
         if (anyone()) restart = setTimeout(start, 2000);   // a câmera caiu ou reiniciou: de novo
       });
-      console.log(`vídeo ao vivo: 1 conexão com a câmera para ${views.join(', ')} e a IA`);
+      console.log(`${new Date().toLocaleTimeString('pt-BR')} vídeo ao vivo: 1 conexão com a câmera para ${views.join(', ')} e a IA`);
     } finally {
       starting = false;
     }

@@ -33,7 +33,7 @@
     "defaults": { "Brightness": 50, "Contrast": 50, "ColorSaturation": 50, "Sharpness": 10, "IrCutFilter": "AUTO", "WideDynamicRange": "OFF" }
   },
   "snapshot": { "method": "rtsp-frame", "why": "webcapture.jpg refuses admin auth by query" },
-  "ptz": { "accepted": true, "motor": "unconfirmed (bullet camera, probably fixed)" },
+  "ptz": { "accepted": true, "motor": "confirmed via DVRIP", "personFollow": true, "homePreset": 1 },
   "audio": { "microphone": true, "speaker": true, "talkback": "dvrip-34567 (not done)" },
   "events": ["CellMotionDetector", "TamperEngine"]
 }
