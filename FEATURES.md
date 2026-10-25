@@ -14,7 +14,10 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
 - [x] Ajustes de imagem: brilho, contraste, saturação, nitidez, WDR, **Dia/Noite** (IrCut).
 - [x] Otimização automática de FPS/bitrate na conexão (12→20/25 fps).
 - [x] **Detecção por IA no camera-ai** (pessoa=verde, animal=laranja, incerto=vermelho): roda no
-      PC (`server/ai.mjs`) e vai para todas as telas; o navegador só desenha.
+      PC (`server/ai.mjs`) e vai para todas as telas; o navegador só desenha. YOLO11s na placa de
+      vídeo (~12 ms, 10 análises/s), COCO-SSD de reserva.
+- [ ] **Seguir pessoa:** a lente de baixo tem motor; o rastreamento de fábrica a perde e não volta.
+      Fazer o nosso: a IA acha a pessoa e o camera-ai move a lente pelo DVRIP, voltando ao preset 1.
 - [x] **API das telas** (`/api/screen`): as TVs com o nevtv mostram a câmera com vídeo nítido, IA e
       os controles que o camera-ai listar; sem o PC, seguem direto da câmera (sem IA).
 - [x] Interface estilo nevext (Geist, azul #2563eb), player com controles que somem,

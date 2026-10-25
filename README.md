@@ -16,7 +16,7 @@ A câmera (modelo `XM232_X6S-WEQ-H_8M`, 2 lentes de 4MP = "8M") só tem o app iC
   (as duas lentes vêm empilhadas num frame só; a interface recorta cada uma).
 - Foto, gravação local, ouvir o microfone, ajustes de imagem (brilho/contraste/saturação/
   nitidez, WDR, dia/noite) — tudo via ONVIF.
-- **Detecção por IA no próprio camera-ai** (TensorFlow.js + COCO-SSD, no Node): quadrados
+- **Detecção por IA no próprio camera-ai** (YOLO11s na placa de vídeo, ou COCO-SSD de reserva): quadrados
   **verde = pessoa**, **laranja = animal**, **vermelho = incerto**. Roda uma vez, no PC, e vai
   para **todas as telas** (navegador, celular, TVs com o nevtv). Nenhuma imagem sai do PC.
 - **A câmera em qualquer TV da casa** pelo [nevtv](https://github.com/nevext/nevtv): a TV acha o
@@ -75,7 +75,8 @@ Pré-requisitos: **Node 18+** e o **ffmpeg** (baixe uma vez):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File server/get-ffmpeg.ps1   # baixa ffmpeg p/ server/bin
-npm install                                                       # a IA (TensorFlow.js, ~300 MB)
+npm install                                                       # a IA (ONNX Runtime + TensorFlow.js)
+powershell -ExecutionPolicy Bypass -File server/get-yolo.ps1      # o YOLO11s (opcional, bem mais preciso)
 node server/proxy.mjs                                             # sobe tudo na porta 8787
 ```
 
@@ -112,7 +113,8 @@ assets/app.css        estilo (tema nevext, Geist)
 assets/app.js         lógica da UI (lentes, qualidade, PTZ, imagem, áudio, foto, gravar)
 assets/detect.js      desenha a detecção: usa a IA do camera-ai (ou roda a própria, se ela faltar)
 server/proxy.mjs      proxy ONVIF/RTSP + servidor web + API das telas (porta 8787, UDP 8788)
-server/ai.mjs         a IA (COCO-SSD no Node): analisa o vídeo e manda para as telas
+server/ai.mjs         a IA (YOLO11s na placa de vídeo, ou COCO-SSD): analisa o vídeo e manda para as telas
+server/get-yolo.ps1   baixa e converte o YOLO11s para server/models/yolo11s/
 server/live.mjs       a conexão única com a câmera: vistas H.264 para as telas e quadros para a IA
 package.json          dependências da IA (npm install)
 profiles/             o que sabemos de cada câmera (lido pelo proxy e pelos apps)

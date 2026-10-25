@@ -184,6 +184,14 @@ motor), **Foto/Gravar** (precisam de ffmpeg ou de guardar arquivo na TV), **otim
 (já persistida pelo proxy) e **detecção por IA**. No modo metade, o vídeo é o sub (800×448), então
 cada lente sai em 800×224 ampliada: a TV não decodifica o main.
 
+### IA: YOLO11s na placa de vídeo (2026-10-25)
+
+O detector passou a ser o **YOLO11s** (ONNX Runtime, `server/ai.mjs`), exportado com
+`server/get-yolo.ps1` em 640×736 (o quadro da IA, 640×720, mais umas linhas). Na RTX 3060 pelo
+DirectML: **~12 ms por quadro** (no processador, ~150 ms); a IA passou a 10 análises por segundo. Na
+mesma cena, o COCO-SSD via a pessoa na mesa com 40% ("incerto"); o YOLO, com ~60%. Sem o modelo ou
+sem `onnxruntime-node`, volta ao COCO-SSD sozinho. Pesos do YOLO11: AGPL-3.0 (Ultralytics).
+
 ### O camera-ai como "cérebro" (2026-10-24)
 
 A IA saiu do navegador e passou a rodar **no camera-ai** (`server/ai.mjs`), uma vez por câmera,
@@ -224,6 +232,16 @@ congestionada por outro aparelho). Conclusão até aqui: 4096 é o que funciona;
 ser medido de novo com a rede calma (ping do roteador < 10 ms), em vários horários. A câmera está no
 Wi-Fi **5 GHz** (a TV no 2,4 GHz).
 
+**De novo com a rede calma (2026-10-25, ~00h30, roteador a 9 ms):** 5, 6, 7, 8 e 9 Mbps funcionaram
+(12 fps, imagens no máximo ~0,6 s atrasadas). Mas à noite a câmera manda **só ~1 Mbps** de verdade,
+qualquer que seja o limite (imagem P&B parada comprime muito), então o limite configurado nem é usado.
+**O teste do limite só vale de dia** (cor, 20 fps, movimento). A falha de 8 Mbps foi com a rede
+congestionada. Fica em 4096 até medir de dia; depois: o maior degrau estável menos um.
+
+**Noite = 12 fps, e não é a exposição:** desligar `LowLuxMode` e cortar `ExposureParam.MostTime` pela
+metade (0x10000 → 0x8000) não mudou nada (12,2 → 12,3 fps contados pelo PTS). No infravermelho o
+sensor filma a ~12 fps. As duas mudanças foram desfeitas (`LowLuxMode 1`, `MostTime 0x00010000`).
+
 **2,4 GHz × 5 GHz (câmera no 5, TV no 2,4)** — o caminho do vídeo é câmera →(Wi-Fi 5 GHz)→ roteador
 →(cabo)→ PC (camera-ai) →(cabo)→ roteador →(Wi-Fi 2,4 GHz)→ TV.
 - **5 GHz:** mais rápido e com menos interferência (vizinhos, Bluetooth, micro-ondas ficam no 2,4), mas
@@ -251,6 +269,14 @@ Wi-Fi **5 GHz** (a TV no 2,4 GHz).
 - `Camera.Param`: `ExposureParam.MostTime 0x10000` (até ~65 ms por imagem: no escuro não passa de
   ~15 fps). `Camera.ParamEx`: `LowLuxMode 1` (modo pouca luz), `DayNightSwitch` com dia 07–18h.
 - `Detect.DetectTrack`: `Enable 0` (seguir pessoa desligado), `Sensitivity 2`, `ReturnTime 300`.
+  **Testado em 2026-10-25:** a lente de baixo **tem motor** (é a "ball") e o rastreamento a moveu, mas
+  ela parou virada para a parede e **não voltou** (o `ReturnTime` de 300 s não a trouxe de volta, e o
+  `GotoHomePosition` do ONVIF não move nada). Desligado de novo (`Enable 0`); a lente foi trazida de
+  volta à vista da sala no olho, em passos pelo DVRIP, e essa posição salva como **preset 1**.
+- **PTZ pelo DVRIP** (o ONVIF aceita mas não move): `OPPTZControl` (msg 1400), `Command`
+  `DirectionLeft/Right/Up/Down`, `Parameter.Preset` 65535 para andar e -1 para parar (mandar sempre os
+  dois), `SetPreset` / `GotoPreset` com `Preset` N. O motor é rápido (~0,5 s já muda bastante a vista),
+  e com a lente inclinada esquerda/direita saem invertidas na imagem.
 - `NetWork.Wifi` devolve a **senha do Wi-Fi em texto** para quem logar com a senha vazia: pôr senha
   na câmera (o camera-ai e a TV aceitam login).
 

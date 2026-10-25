@@ -342,13 +342,14 @@ function toggleRecord(on) {
 // Sem o camera-ai, o nevtv fala direto com a câmera e fica com o que consegue sozinho (sem IA).
 
 const SCREEN_VERSION = 1;
-const MODEL_DIR = path.join(HERE, 'models', 'ssdlite_mobilenet_v2');
+const MODEL_DIR = path.join(HERE, 'models');
 const ai = { status: 'loading', model: null, stop: null, last: null, listeners: new Set(), idle: null };
 
 // A conexão única com a câmera (server/live.mjs): telas e IA saem todas dela.
 const live = HAS_FFMPEG && H264 ? createLive({
   ffmpeg: FFMPEG, inputArgs: LIVE_IN, rtsp: () => mainProfile()?.rtsp, encoder: H264,
   views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'],
+  aiFps: 10,   // a IA fica só com o quadro mais novo: num detector lento, ela mesma analisa menos
 }) : null;
 
 // O MJPEG (navegador, TVs sem H.264) também sai da conexão única: o ffmpeg lê o H.264 da vista aqui
@@ -373,7 +374,7 @@ async function loadAi() {
     ai.status = 'unavailable';
     console.log('IA indisponível:', e.message);
   }
-  console.log('IA: ' + (ai.status === 'on' ? 'ligada' : 'sem IA (rode npm install)'));
+  console.log('IA: ' + (ai.status === 'on' ? `ligada (${ai.model.name}, ${ai.model.device === 'gpu' ? 'placa de vídeo' : 'processador'})` : 'sem IA (rode npm install)'));
   if (ai.listeners.size) startAi();
 }
 
@@ -454,7 +455,7 @@ async function screenInfo() {
     lenses: PROFILE.lenses || null,
     video: HAS_FFMPEG ? { mjpeg: '/api/screen/video', formats: live ? ['ts', 'mjpeg'] : H264 ? ['h264', 'mjpeg'] : ['mjpeg'],
       views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'] } : null,
-    ai: { status: ai.status, events: '/api/screen/events' },
+    ai: { status: ai.status, model: ai.model?.name || null, device: ai.model?.device || null, events: '/api/screen/events' },
     audio: live && PROFILE.audio?.microphone !== false ? { pcm: '/api/screen/audio', rate: 8000, channels: 1 } : null,
     controls: await screenControls().catch(() => []),
   };
