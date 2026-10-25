@@ -606,13 +606,34 @@ async function imagingOptions() {
   return IMAGING_OPTIONS;
 }
 
+// Visão noturna pelo DVRIP (Camera.ParamEx DayNightSwitch): esta câmera aceita o IrCutFilter do ONVIF e ignora
+// (conferido em 25/10, a imagem não muda). Ligada = automática (a câmera passa para o infravermelho quando
+// escurece); desligada = "dia o tempo todo" (sempre colorida). Leva ~10 s para a imagem mudar.
+const ALWAYS_DAY = '0 00:00:00-23:59:59';
+async function nightVision() {
+  const r = await (await dvrSession()).request(1042, { Name: 'Camera.ParamEx.[0]' });
+  const s = r['Camera.ParamEx.[0]']?.DayNightSwitch;
+  return !(s?.SwitchMode === 1 && s?.KeepDayPeriod === ALWAYS_DAY);
+}
+async function setNightVision(on) {
+  const name = 'Camera.ParamEx.[0]';
+  const session = await dvrSession();
+  const cur = (await session.request(1042, { Name: name }))[name];
+  if (!cur) return { ok: false, error: 'a câmera não respondeu' };
+  cur.DayNightSwitch = on ? { KeepDayPeriod: '0 07:00:00-18:00:00', SwitchMode: 0 } : { KeepDayPeriod: ALWAYS_DAY, SwitchMode: 1 };
+  const r = await session.request(1040, { Name: name, [name]: cur });
+  if (Number(r.Ret) !== 100) return { ok: false, error: 'a câmera recusou (' + r.Ret + ')' };
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Visão noturna: ${on ? 'ligada (automática)' : 'desligada (sempre colorida)'}`);
+  return { ok: true };
+}
+
 // O que a tela mostra no painel, na ordem. type: choice (options), level (min/max/step), toggle.
 async function screenControls() {
   if (!cam.addr) return [];
-  const s = await getImaging();
   // Só o que se usa: o resto (brilho, contraste, cor, nitidez, contraluz, vídeo, clipes) fica no navegador
+  const night = cam.dvr ? await nightVision().catch(() => null) : null;
   return [
-    { id: 'night', type: 'toggle', label: L('Visão noturna', 'Night vision'), value: s.ircut === 'OFF' },
+    ...(night == null ? [] : [{ id: 'night', type: 'toggle', label: L('Visão noturna', 'Night vision'), value: night }]),
     ...(PROFILE.ptz?.personFollow ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
   ];
 }
@@ -625,8 +646,7 @@ async function screenControl(id, value) {
       if (dayNight.mode === 'SCHEDULE') { lastScheduled = null; await applySchedule(); return { ok: true }; }
       return setImaging({ ircut: String(value) });
     },
-    // Liga ou desliga agora; o horário (19h–6h) volta a mandar na próxima virada
-    night: () => setImaging({ ircut: value ? 'OFF' : 'ON' }),
+    night: () => setNightVision(!!value),
     wdr: () => setImaging({ wdr: value ? 'ON' : 'OFF' }),
     brightness: () => setImaging({ brightness: +value }),
     contrast: () => setImaging({ contrast: +value }),
@@ -1000,7 +1020,6 @@ async function applySchedule() {
     }
   } catch (e) { console.log('Dia/noite:', e.message); }
 }
-setInterval(applySchedule, 60000);
 // WS-Discovery (ONVIF): a primeira câmera que responder na rede. Um socket por rede do PC: sem
 // isso o Windows pode mandar a busca só pela VPN (Tailscale, etc.) e nenhuma câmera responde.
 function findCamera(timeout = 3000) {
@@ -1165,5 +1184,4 @@ server.listen(PORT, '0.0.0.0', () => {
   startDiscovery();
   autoConnect();
   loadAi();
-  setTimeout(applySchedule, 8000);   // depois de conectar na câmera
 });
