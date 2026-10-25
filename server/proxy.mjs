@@ -843,7 +843,7 @@ async function logActivity(type, text, { thumb = false, box = null, label = null
   if (GROUPED.has(type) && last?.type === type && now - (last.until || last.at) < 180000) {
     last.until = now; last.count = (last.count || 1) + 1;
     try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
-    return broadcast({ type: 'activity', update: true, ...last });
+    return broadcast({ type: 'activity', update: true, item: last });
   }
   const entry = { at: now, type, text, camera: perfil?.data.name || 'Câmera' };
   if (box) entry.box = box;
@@ -852,7 +852,7 @@ async function logActivity(type, text, { thumb = false, box = null, label = null
   if (thumb) entry.thumb = await activityThumb(type === 'person' || type === 'animal');
   activity = [...activity, entry].slice(-500);
   try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
-  broadcast({ type: 'activity', ...entry });
+  broadcast({ type: 'activity', item: entry });   // a atividade vai em item: ela tem o próprio type (person, motion…)
 }
 let lastAiFrame = null;
 async function activityThumb(fromAi = false) {

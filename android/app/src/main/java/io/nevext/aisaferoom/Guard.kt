@@ -68,7 +68,11 @@ class Guard : Service() {
         while (running) {
             val hub = reachable()
             if (hub != null) {
-                runCatching { hub.events({ e -> if (e.optString("type") == "activity" && !e.optBoolean("update")) onActivity(hub, e) }, { running }) }
+                runCatching {
+                    hub.events({ e ->
+                        if (e.optString("type") == "activity" && !e.optBoolean("update")) e.optJSONObject("item")?.let { onActivity(hub, it) }
+                    }, { running })
+                }
             }
             if (running) Thread.sleep(10_000)
         }

@@ -191,12 +191,14 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                         when (e.optString("type")) {
                             "detections" -> live.detections = parseDetections(e.optJSONArray("items"))
                             "motion" -> live.moving = e.optBoolean("active")
-                            "activity" -> live.activity = JSONArray().also { a ->
-                                // A grouped movement comes again with its new end and count: it takes its own place
-                                if (!e.optBoolean("update")) a.put(e)
-                                for (i in 0 until minOf(live.activity.length(), 199)) {
-                                    val old = live.activity.optJSONObject(i)
-                                    a.put(if (e.optBoolean("update") && old?.optLong("at") == e.optLong("at")) e else old)
+                            "activity" -> e.optJSONObject("item")?.let { item ->
+                                live.activity = JSONArray().also { a ->
+                                    // A grouped movement comes again with its new end and count: it takes its own place
+                                    if (!e.optBoolean("update")) a.put(item)
+                                    for (i in 0 until minOf(live.activity.length(), 199)) {
+                                        val old = live.activity.optJSONObject(i)
+                                        a.put(if (e.optBoolean("update") && old?.optLong("at") == item.optLong("at")) item else old)
+                                    }
                                 }
                             }
                         }
