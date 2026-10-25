@@ -284,6 +284,23 @@ sensor filma a ~12 fps. As duas mudanças foram desfeitas (`LowLuxMode 1`, `Most
   dá pulsos horizontais curtos na lente móvel pelo DVRIP; ao ficar 12 s sem pessoa, manda `GotoPreset` 1. O recurso
   exige IA do servidor, stream de análise e DVRIP; não altera a configuração do rastreamento de fábrica. A direção
   horizontal usa a inversão observada neste aparelho. Implementação concluída, pendente validação ao vivo.
+- **Medido em 25/10/2026 (motor e seguir):**
+  - A sessão DVRIP aberta enquanto a câmera ainda liga morre sem aviso (o login passa, depois a câmera fecha);
+    o motor não respondia por isso. O camera-ai agora refaz a sessão quando ela cai.
+  - Direções pela API do camera-ai: `left` vira a lente para a esquerda, `up` para cima (a inversão fica dentro
+    do `ptz()`); conferido com fotos. Um pulso de 450 ms (passo 3) anda ~1/4 da largura da imagem.
+  - `GotoPreset 1` é repetível (três idas, mesmo enquadramento a poucos pixels). O preset 1 salvo aponta para
+    as prateleiras e a porta perto da câmera, não para o meio do quarto.
+  - `Uart.PTZPreset` (GetConfig 1042) lista os presets (`[[{"Id":1}]]`); `Detect.DetectTrack` mostra o
+    rastreamento de fábrica (`Enable 0`).
+  - Girar o motor não dispara o detector de movimento da própria câmera (ONVIF).
+- **A câmera em dois IPs:** responde em 192.168.0.36 e .41 ao mesmo tempo (mesmo número de série), e já esteve
+  na .42. Por isso o camera-ai procura de novo na rede se ela some, e o nevtv guarda o número de série para
+  achá-la no camera-ai depois de mudar de endereço.
+- **IA:** RF-DETR medium (Apache 2.0) no lugar do YOLO11s (AGPL): ~45 ms na RTX 3060; mais nota para a mesma pessoa
+  difícil (0,51 × 0,38) e nenhum alarme falso em 10 quadros vazios.
+- **Entrega (vistoria, à noite):** 12,5 de 12,4 quadros/s, 1,1 Mbps no vídeo grande e 0,1 no pequeno, rajadas de
+  ~0,4 s, sem perdas: Nível 3. Quando a TV começou a assistir, um engasgo (5% de perda, 1,3 s de rajada).
 
 
 **Firmware aberto (OpenIPC):** para XiongMai compatíveis existe o *Coupler*, instalado pelo botão de
