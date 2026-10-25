@@ -55,6 +55,14 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
 - [ ] **Falar pela câmera e alarme de voz:** a câmera tem 3 vozes prontas (`Ability.VoiceTipType`: Alarme, "Você
       entrou na área de monitoramento", Personalizar) e o aviso de voz no movimento (`Detect.MotionDetect`
       `VoiceEnable`, desligado). Falta conferir ouvindo (faz barulho no quarto) e o áudio de ida (interfone).
+- [x] **Pessoas conhecidas (rosto):** cadastro guiado no app (dicas, nome, consentimento; depois "olhe para a
+      câmera", "vire para a esquerda/direita", "levante o queixo", com o rosto marcado e progresso), YuNet + SFace
+      (OpenCV Zoo, Apache 2.0) no PC (`server/faces.mjs`, `server\get-faces.ps1`). A visita ganha o nome ("Deivid no
+      Quarto") ou vira "Pessoa desconhecida". Rostos só no PC (`server/perfis/rostos.json`), apagáveis. Só reconhece
+      quem olha para a câmera razoavelmente perto. Falta: confirmar "quem é" nas atividades (aprender com o tempo),
+      avisar só de desconhecidos, e o corpo/roupa para seguir a mesma pessoa de costas.
+- [x] **Identificação:** pessoa vira visita (com quantas juntas), animal pede nota 0,8 em 8 de 10 análises, "Tem
+      animais em casa", "Foi engano" (`/api/activity/forget`).
 - [x] **Perfil de cada câmera** (`server/perfil.mjs`, `server/perfis/<serial>.json`, `/api/perfil`): o que ela
       tem, o que foi conferido e o histórico (vistorias, níveis, conexões, recursos). Ao conectar, lê o que a câmera
       diz (ONVIF; nas XM, a lista `SystemFunction` pelo DVRIP). A **vistoria completa** (menu ☰ → Teste da câmera →

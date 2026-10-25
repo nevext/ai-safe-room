@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.VideocamOff
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material.icons.outlined.CropFree
 import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.Pets
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Waves
@@ -699,6 +700,7 @@ fun SettingsScreen(onOpen: (Screen) -> Unit) {
         Column(Modifier.fillMaxWidth().card(palette)) {
             ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos, zonas e vistoria", onClick = { onOpen(Screen.Features) })
             ListRow(Icons.Outlined.Notifications, "Proteção e avisos", "Avisos no celular, horário, resumo do dia", onClick = { onOpen(Screen.Protection) })
+            ListRow(Icons.Outlined.Face, "Pessoas conhecidas", "Reconhecer as pessoas da casa pelo rosto", onClick = { onOpen(Screen.People) })
             ListRow(Icons.Outlined.Group, "Família e aparelhos", "Quem tem acesso às câmeras", onClick = { onOpen(Screen.Family) })
             ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Soon("Armazenamento")) })
         }

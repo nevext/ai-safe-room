@@ -49,6 +49,8 @@ sealed interface Screen {
     data object Protection : Screen
     data object Family : Screen
     data object Zones : Screen
+    data object People : Screen
+    data object Enroll : Screen
     data class Soon(val title: String) : Screen
 }
 
@@ -260,6 +262,11 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 BackHandler { screen = Screen.Features }
                 ZonesScreen(live, onBack = { screen = Screen.Features })
             }
+            Screen.People -> if (h != null) {
+                BackHandler(onBack = back)
+                PeopleScreen(live, onBack = back, onEnroll = { screen = Screen.Enroll })
+            }
+            Screen.Enroll -> if (h != null) EnrollScreen(live, visible, onBack = { screen = Screen.People })
             Screen.Protection -> if (h != null) {
                 BackHandler(onBack = back)
                 ProtectionScreen(live, prefs, onBack = back)

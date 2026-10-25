@@ -72,6 +72,14 @@ class Hub(val root: String, val key: String?) {
     /** Whether there are animals in the house: if not, the AI ignores animals. */
     fun setPets(on: Boolean): JSONObject = json("$base/api/perfil", JSONObject().put("pets", on).toString())
 
+    /** Known people (faces): who's registered and whether the face models are there. */
+    fun faces(): JSONObject = json("$base/api/faces")
+    fun startEnroll(name: String, consent: Boolean): JSONObject =
+        json("$base/api/faces/enroll", JSONObject().put("name", name).put("consent", consent).toString(), allowError = true)
+    fun enrollStatus(): JSONObject = json("$base/api/faces/enroll")
+    fun cancelEnroll() { json("$base/api/faces/enroll", JSONObject().put("cancel", true).toString()) }
+    fun removeFace(id: String): JSONObject = json("$base/api/faces/remove", JSONObject().put("id", id).toString())
+
     /** Protection (away mode): on, and its schedule. */
     fun setProtection(on: Boolean): JSONObject = json("$base/api/protection", JSONObject().put("on", on).toString())
     fun setProtectionSchedule(enabled: Boolean, on: String, off: String): JSONObject = json("$base/api/protection",
