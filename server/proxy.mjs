@@ -86,7 +86,8 @@ const PROFILE = (() => {
 const COMMON_CREDS = PROFILE.credentials || [['admin', ''], ['admin', 'admin'], ['admin', '123456'], ['admin', 'tlJwpbo6']];
 
 const cam = { addr: null, user: 'admin', pass: '', onvif: null, dvr: null, ptzDir: null, profiles: [], info: {}, snapUri: null, streamUri: null, videoSource: 'V_SRC_000' };
-const follow = { enabled: false, lastMove: 0, lostAt: 0, returned: false, searchPulses: 0, hitFrames: 0, timer: null };
+const follow = { wanted: (() => { try { return !!JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).follow; } catch { return false; } })(),
+  enabled: false, lastMove: 0, lostAt: 0, returned: false, searchPulses: 0, hitFrames: 0, timer: null };
 
 // ---------- helpers HTTP ----------
 const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
@@ -216,14 +217,27 @@ function ffmpegFrame(rtsp) {
 }
 
 // ---------- PTZ (ONVIF) ----------
-async function dvrPtz(command, preset, step = 5) {
+// Sessão DVRIP viva: se a câmera fechou a anterior, loga de novo (uma tentativa por vez).
+let dvrLogin = null;
+async function dvrSession() {
   if (!cam.dvr) throw new Error('Controle pelo DVRIP indisponível');
-  const reply = await cam.dvr.request(1400, { Name: 'OPPTZControl', OPPTZControl: {
+  if (!cam.dvr.closed) return cam.dvr;
+  dvrLogin ??= dvrip(cam.addr, cam.user, cam.pass)
+    .then(d => { console.log(`${new Date().toLocaleTimeString('pt-BR')} DVRIP: sessão refeita`); return cam.dvr = d; })
+    .finally(() => { dvrLogin = null; });
+  return dvrLogin;
+}
+async function dvrPtz(command, preset, step = 5) {
+  const payload = { Name: 'OPPTZControl', OPPTZControl: {
     Channel: 0, Command: command, Parameter: {
       AUX: { Number: 0, Status: 'On' }, Channel: 0, MenuOpts: 'Enter', Pattern: 'Start',
       Preset: preset, Step: step, Tour: 0,
     },
-  } });
+  } };
+  let reply;
+  try { reply = await (await dvrSession()).request(1400, payload); }
+  catch { reply = await (await dvrSession()).request(1400, payload); }   // a sessão caiu no meio: mais uma vez
+
   if (![100, 150, 515].includes(Number(reply.Ret))) throw new Error('Comando PTZ recusado (' + (reply.Ret ?? 'sem código') + ')');
   return reply;
 }
@@ -405,6 +419,7 @@ async function loadAi() {
   }
   console.log('IA: ' + (ai.status === 'on' ? `ligada (${ai.model.name}, ${ai.model.device === 'gpu' ? 'placa de vídeo' : 'processador'})` : 'sem IA (rode npm install)'));
   if (ai.listeners.size) startAi();
+  resumeFollow();
 }
 
 // Analisa só enquanto alguma tela está assistindo.
@@ -425,10 +440,7 @@ function updateFollow(result) {
     const dir = centerX < 0.38 ? 'left' : centerX > 0.62 ? 'right'
       : centerY < 0.34 ? 'up' : centerY > 0.66 ? 'down' : null;
     if (!dir || follow.hitFrames < 3 || now - follow.lastMove < 1200) return;
-    follow.lastMove = now;
-    ptz(dir, 'start', 3).catch(e => console.log('Rastreamento PTZ:', e.message));
-    clearTimeout(follow.timer);
-    follow.timer = setTimeout(() => ptz(dir, 'stop', 3).catch(() => {}), 450);
+    followPulse(dir, `lente móvel x=${centerX.toFixed(2)} y=${centerY.toFixed(2)}`);
     return;
   }
 
@@ -441,18 +453,28 @@ function updateFollow(result) {
     const dir = centerX < 0.38 ? 'left' : centerX > 0.62 ? 'right' : null;
     if (dir) {
       follow.searchPulses++;
-      follow.lastMove = now;
-      ptz(dir, 'start', 3).catch(e => console.log('Rastreamento PTZ:', e.message));
-      clearTimeout(follow.timer);
-      follow.timer = setTimeout(() => ptz(dir, 'stop', 3).catch(() => {}), 450);
+      followPulse(dir, `procurando pela lente fixa x=${centerX.toFixed(2)}`);
     }
   }
   if (!follow.returned && now - follow.lostAt >= 12000 && now - follow.lastMove >= 1000) {
     follow.returned = true; follow.lastMove = now;
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Seguir: 12 s sem pessoa, voltando ao preset 1`);
     ptz('home', 'start').catch(e => console.log('Rastreamento: retorno ao preset falhou:', e.message));
   }
 }
+// Um pulso curto (~1/4 da imagem). Registrado no log para dar para conferir depois como o seguir se comportou.
+function followPulse(dir, why) {
+  follow.lastMove = Date.now();
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Seguir: ${dir} (${why})`);
+  ptz(dir, 'start', 3).catch(e => console.log('Rastreamento PTZ:', e.message));
+  clearTimeout(follow.timer);
+  follow.timer = setTimeout(() => ptz(dir, 'stop', 3).catch(() => {}), 450);
+}
+function resumeFollow() {
+  if (follow.wanted && !follow.enabled && setFollow(true).enabled) console.log('Seguir pessoa: ligado (estava ligado antes)');
+}
 function setFollow(enabled) {
+  if (follow.wanted !== !!enabled) { follow.wanted = !!enabled; saveState(); }   // lembrado: volta ligado se o camera-ai reiniciar
   follow.enabled = !!enabled && !!cam.dvr && !!ai.model && !!live;
   follow.lastMove = 0; follow.lostAt = 0; follow.returned = false; follow.searchPulses = 0; follow.hitFrames = 0;
   clearTimeout(follow.timer); follow.timer = null;
@@ -629,7 +651,7 @@ function startDiscovery() {
 // endereço do perfil. Assim as telas acham a câmera pronta, sem abrir a interface no navegador antes.
 const STATE_FILE = path.join(HERE, 'state.json');
 function saveState() {
-  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight })); } catch {}
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted })); } catch {}
 }
 
 // ---------- Dia/noite por horário ----------
@@ -701,6 +723,7 @@ async function autoConnect(tries = 0) {
       const r = await connect(addr, saved.user, saved.pass);
       ok = r.ok;
       console.log(ok ? `Câmera: ${addr} conectada` : `Câmera: ${addr} não respondeu (${r.error})`);
+      if (ok) resumeFollow();
     } catch (e) {
       console.log(`Câmera: ${addr} não respondeu (${e.message})`);
     }
@@ -709,6 +732,23 @@ async function autoConnect(tries = 0) {
   }
   if (!ok) { cam.addr = null; setTimeout(() => autoConnect(tries + 1), 15000); }
 }
+
+// Já conectada, a câmera pode reiniciar e voltar com outro IP (DHCP): sem isso o camera-ai ficaria
+// tentando o endereço velho para sempre. 3 falhas seguidas (~90 s) = soltar e procurar de novo.
+let camMisses = 0, camChecking = false;
+setInterval(async () => {
+  if (!cam.addr) { camMisses = 0; return; }
+  if (camChecking) return;   // a pergunta anterior ainda esperando o tempo esgotar
+  camChecking = true;
+  const r = await soap(null, `<tds:GetDeviceInformation/>`).catch(() => ({ ok: false })).finally(() => { camChecking = false; });
+  if (!cam.addr) return;
+  if (r.ok) { camMisses = 0; return; }
+  if (++camMisses < 3) return;
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Câmera: ${cam.addr} sumiu; procurando de novo na rede`);
+  camMisses = 0;
+  cam.addr = null; cam.dvr?.close(); cam.dvr = null;
+  autoConnect(1);   // ímpar: procura na rede primeiro (o IP pode ter mudado)
+}, 30000);
 
 // ---------- servidor ----------
 const server = http.createServer(async (req, res) => {

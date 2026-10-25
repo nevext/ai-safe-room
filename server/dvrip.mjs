@@ -119,6 +119,8 @@ export async function dvrip(host, user = 'admin', password = '', port = 34567) {
 
     return {
       get sessionId() { return sessionHex(); },
+      // A câmera fecha a sessão sem avisar (ao reiniciar, ou se o login pegou ela ainda ligando)
+      get closed() { return socket.destroyed; },
       request,
       close() {
         clearInterval(keepalive);
