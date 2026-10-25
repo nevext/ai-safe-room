@@ -47,7 +47,10 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       fica num PC/servidor e o app só consome. Definir arquitetura do APK.
 
 ### Funcionalidades da câmera
-- [ ] **Alerta de movimento** (ONVIF PullPoint) — avisar e/ou gravar só quando mexe.
+- [ ] **Alerta de movimento** (ONVIF PullPoint) — avisar e/ou gravar só quando mexe. *Parte feita:* o
+      camera-ai assina o movimento da câmera (`server/motion.mjs`) e manda `{type:"motion"}` em
+      `/api/screen/events` (e `motion` no `/api/screen`); falta ver um "sim" de verdade (girar o motor
+      não dispara), avisar no celular e gravar por evento.
 - [ ] Notificação quando detectar **pessoa** (som/vibração/destaque).
 - [ ] **Falar pela câmera** (push-to-talk pelo alto-falante) via DVRIP 34567.
 - [ ] Confirmar se há **motor PTZ** (provável câmera fixa → esconder o direcional).

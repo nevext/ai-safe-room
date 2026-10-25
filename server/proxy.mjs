@@ -18,6 +18,7 @@ import { loadModel, analyzer } from './ai.mjs';
 import { createLive, keyframeAt } from './live.mjs';
 import { dvrip } from './dvrip.mjs';
 import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
+import { watchMotion } from './motion.mjs';
 
 const PORT = 8787;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -498,6 +499,20 @@ function broadcast(event) {
   for (const res of ai.listeners) res.write(line);
 }
 
+// O aviso de movimento da própria câmera (server/motion.mjs): vai para as telas junto com a IA.
+const motion = { since: null, last: null };
+const motionWatch = watchMotion({
+  host: () => cam.addr,
+  onChange: active => {
+    const now = Date.now();
+    if (active) { motion.since = now; motion.last = now; }
+    else if (motion.since) console.log(`${new Date().toLocaleTimeString('pt-BR')} Movimento na câmera (${Math.round((now - motion.since) / 1000)} s)`);
+    if (!active) motion.since = null;
+    broadcast({ type: 'motion', active, t: now });
+  },
+  onError: e => console.log('Movimento da câmera indisponível:', e.message),
+});
+
 const L = (pt, en) => ({ pt, en });
 const IMAGING_OPTIONS = {};
 async function imagingOptions() {
@@ -669,6 +684,7 @@ async function screenInfo() {
     ai: { status: ai.status, model: ai.model?.name || null, device: ai.model?.device || null, events: '/api/screen/events' },
     audio: live && PROFILE.audio?.microphone !== false ? { pcm: '/api/screen/audio', rate: 8000, channels: 1 } : null,
     controls: await screenControls().catch(() => []),
+    motion: { active: motionWatch.active, last: motion.last },
     quality: { level: quality.level.level, label: quality.level.level ? LEVELS[quality.level.level] : null, vistoria: '/api/vistoria' },
   };
 }

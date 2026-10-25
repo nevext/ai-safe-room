@@ -47,7 +47,8 @@ claro/escuro automático).
   vier; controle novo aqui = controle novo em todas as TVs.
 - `POST /api/screen/control` `{id, value}`: muda um controle; devolve todos de novo.
 - `GET /api/screen/events`: NDJSON, uma linha por análise (`detections`: caixas em fração do
-  quadro inteiro, 0–1) e um `ping` a cada 5 s. A IA só roda enquanto alguma tela escuta.
+  quadro inteiro, 0–1), `motion` (`active`: o detector de movimento da própria câmera, quando muda)
+  e um `ping` a cada 5 s. A IA só roda enquanto alguma tela escuta.
 - `GET /api/screen/video?view=whole|top|bottom&width=&height=&format=h264|mjpeg`: o vídeo já recortado
   na lente e no tamanho da tela (o PC decodifica o vídeo grande, que as TVs não aguentam).
   `h264`: H.264 de baixo atraso na placa de vídeo (NVENC/QSV/AMF, ou x264 no processador), ~3 Mbps,
