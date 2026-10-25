@@ -270,6 +270,18 @@ async function showEvents(){
     list.appendChild(row);
   }
 }
+// Senha da própria câmera: sem ela, qualquer um na rede entra na câmera (e lê a senha do Wi-Fi). O camera-ai
+// reconecta sozinho com a nova; se ela não funcionar, a antiga volta.
+$('#miCamPassword')?.addEventListener('click', async () => {
+  menuDlg.close();
+  const p = prompt('Senha nova da câmera (6 a 15 caracteres).\nO camera-ai e as TVs continuam funcionando; o app iCSee vai pedir a nova.');
+  if (p == null) return;
+  if (p !== prompt('Repita a senha nova da câmera')) return toast('As duas não são iguais; nada mudou.');
+  toast('Trocando a senha da câmera…');
+  try { const r = await api('/api/camera-password', { method:'POST', body: JSON.stringify({ password: p }) }); toast(r.ok ? 'Senha da câmera trocada.' : 'Não trocou: ' + r.error); }
+  catch (e) { toast('Não deu: ' + e.message); }
+});
+
 // Pedidos de acesso (TV ou celular sem a senha): quem está aqui permite ou recusa
 const answered = new Set();
 setInterval(async () => {
