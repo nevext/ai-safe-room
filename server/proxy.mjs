@@ -21,6 +21,7 @@ import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
 import { createClips } from './clips.mjs';
 import { createProfiles } from './perfil.mjs';
+import { loadFaces, createPeople, pose } from './faces.mjs';
 
 const PORT = 8787;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -755,6 +756,7 @@ function viewersChanged() {
 function pickedStream() {
   // Só a IA (seguir, clipes): o vídeo pequeno basta e gasta quase nada da câmera (~0,15 Mbps). O grande só com
   // uma tela assistindo por aqui
+  if (facesNeedBig()) return 'main';   // rosto de longe só se reconhece no vídeo grande
   if (!live?.viewers) return viewersGoneAt && Date.now() - viewersGoneAt < 30000 ? videoPick.using : 'sub';
   if (videoPick.choice !== 'auto') return videoPick.choice;
   return quality.level.level === 1 && subProfile() !== mainProfile() ? 'sub' : 'main';
@@ -932,6 +934,7 @@ function arrivals(r) {
       }
     } else if (!v?.pending || now - p.lastSeen >= VISIT_GAP) {
       p.visit = { pending: true };
+      if (kind === 'person' && faces && people.list().length) setTimeout(applyVideoPick, 0);   // o vídeo grande, para o rosto
       logActivity(kind, `${name} no ${where}`, { thumb: true, box: found[0].box, label: name, people: kind === 'person' ? count : undefined })
         .then(entry => { p.visit = entry || null; p.savedAt = Date.now(); });
     }
@@ -1049,6 +1052,167 @@ function serveThumb(res, name) {
   fs.readFile(path.join(ACT_DIR, name), (e, data) => {
     if (e) return json(res, 404, { error: 'não encontrado' });
     res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=604800' });
+    res.end(data);
+  });
+}
+
+// ---------- Rostos: pessoas conhecidas (server/faces.mjs) ----------
+// Cadastro guiado (o app diz "olhe para a câmera", "vire para a esquerda"…) e, depois, cada visita ganha o nome de
+// quem o rosto mostrar ("Deivid no Quarto") ou fica "Pessoa desconhecida". Tudo no PC; cada pessoa concordou.
+let faces = null;
+const people = createPeople(path.join(HERE, 'perfis', 'rostos.json'));
+const AVATARS = path.join(HERE, 'perfis', 'rostos');
+fs.mkdirSync(AVATARS, { recursive: true });
+loadFaces(path.join(MODEL_DIR, 'faces')).then(f => {
+  faces = f;
+  console.log(f ? `Rostos: ligado (${people.list().length} pessoa(s) conhecida(s))` : 'Rostos: sem os modelos (rode server\\get-faces.ps1)');
+  syncFaces();
+}).catch(e => console.log('Rostos indisponível:', e.message));
+
+// O cadastro: os passos, quantas fotos boas de cada jeito, e o que dizer à pessoa
+const STEPS = [
+  { id: 'front', need: 4, say: 'Olhe direto para a câmera' },
+  { id: 'left', need: 2, say: 'Vire o rosto um pouco para a sua esquerda' },
+  { id: 'right', need: 2, say: 'Agora um pouco para a sua direita' },
+  { id: 'up', need: 2, say: 'Levante um pouco o queixo' },
+];
+let enroll = null;   // { name, step, samples: {front: [...]}, avatar, hint, face, startedAt, lastAt, done }
+function enrollStatus() {
+  if (!enroll) return { active: false };
+  const total = STEPS.reduce((n, s) => n + s.need, 0);
+  const have = STEPS.reduce((n, s) => n + Math.min(s.need, enroll.samples[s.id].length), 0);
+  const step = STEPS[enroll.step];
+  return { active: !enroll.done, done: !!enroll.done, name: enroll.name, step: step?.id || 'done', prompt: enroll.done ? 'Pronto!' : step.say,
+    hint: enroll.hint, progress: have / total, face: enroll.face, person: enroll.person || null };
+}
+function startEnroll(name, consent) {
+  if (!faces) return { ok: false, error: 'os modelos de rosto não estão instalados' };
+  if (!consent) return { ok: false, error: 'a pessoa precisa concordar com o cadastro do rosto' };
+  name = String(name || '').trim().slice(0, 40);
+  if (!name) return { ok: false, error: 'falta o nome' };
+  enroll = { name, step: 0, samples: Object.fromEntries(STEPS.map(s => [s.id, []])), hint: 'Procurando o rosto…', face: null, startedAt: Date.now(), lastAt: 0 };
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Rostos: cadastrando ${name}`);
+  syncFaces();
+  return { ok: true, ...enrollStatus() };
+}
+function stopEnroll() { enroll = null; syncFaces(); return { ok: true }; }
+
+// Uma imagem grande (1 por segundo): no cadastro, cada rosto bom vira uma foto do passo; fora dele, dá nome à visita
+let facesBusy = false, stopHires = null;
+async function onHires(rgb, w, h) {
+  if (facesBusy || !faces) return;
+  facesBusy = true;
+  try {
+    if (enroll && !enroll.done) await enrollFrame(rgb, w, h);
+    else if (people.list().length && Date.now() - presence.person.lastSeen < 5000) await recognizeFrame(rgb, w, h);
+  } catch (e) { console.log('Rostos:', e.message); }
+  finally { facesBusy = false; }
+}
+function syncFaces() {
+  const want = !!faces && (!!(enroll && !enroll.done) || people.list().length > 0);
+  if (want && !stopHires && live) stopHires = live.onHires(onHires);
+  if (!want && stopHires) { stopHires(); stopHires = null; }
+  setTimeout(applyVideoPick, 0);
+}
+function facesNeedBig() {
+  if (enroll && !enroll.done) return true;
+  return !!faces && people.list().length > 0 && Date.now() - presence.person.lastSeen < 60000;
+}
+const norm = (b, w, h) => [b[0] / w, b[1] / h, b[2] / w, b[3] / h];
+
+async function enrollFrame(rgb, w, h) {
+  if (Date.now() - enroll.startedAt > 5 * 60e3) { enroll.hint = 'O cadastro passou de 5 minutos: comece de novo.'; enroll.done = 'timeout'; return; }
+  const found = (await faces.detect(rgb, w, h, 0.75)).filter(f => f.box[2] >= 40);
+  if (!found.length) {
+    let luma = 0; for (let i = 0; i < rgb.length; i += 3 * 97) luma += rgb[i + 1];
+    enroll.hint = luma / (rgb.length / (3 * 97)) < 45 ? 'Está escuro: acenda a luz para a câmera ver o rosto.'
+      : 'Não vejo um rosto: fique de frente para a câmera, a uns 1 a 2 metros.';
+    enroll.face = null;
+    return;
+  }
+  if (found.length > 1 && found[1].box[2] > found[0].box[2] * 0.6) { enroll.hint = 'Só a pessoa que está cadastrando na frente da câmera.'; enroll.face = null; return; }
+  const face = found[0];
+  enroll.face = norm(face.box, w, h);
+  if (face.box[2] < 56) { enroll.hint = 'Chegue um pouco mais perto da câmera.'; return; }
+  const step = STEPS[enroll.step];
+  const p = pose(face.points);
+  const front = enroll.samples.front;
+  const frontPitch = front.length ? front.reduce((n, s) => n + s.pitch, 0) / front.length : null;
+  const fits = {
+    front: Math.abs(p.yaw) < 0.12,
+    left: p.yaw > 0.22,
+    right: p.yaw < -0.22,
+    up: frontPitch != null && p.pitch < frontPitch - 0.12 && Math.abs(p.yaw) < 0.2,
+  }[step.id];
+  if (!fits) { enroll.hint = step.say; return; }
+  if (Date.now() - enroll.lastAt < 700) return;   // fotos espaçadas: um pouco diferentes umas das outras
+  const { vector, aligned } = await faces.embed(rgb, w, h, face);
+  enroll.samples[step.id].push({ vector, pitch: p.pitch });
+  enroll.lastAt = Date.now();
+  if (step.id === 'front' && !enroll.avatar) enroll.avatar = aligned;
+  enroll.hint = 'Isso! Fique assim…';
+  if (enroll.samples[step.id].length >= step.need) {
+    enroll.step++;
+    if (enroll.step >= STEPS.length) await finishEnroll();
+    else enroll.hint = STEPS[enroll.step].say;
+  }
+}
+async function finishEnroll() {
+  const vectors = Object.values(enroll.samples).flat().map(s => s.vector);
+  const person = people.add(enroll.name, vectors, true);
+  if (enroll.avatar) await saveAvatar(person.id, enroll.avatar);
+  enroll.done = true;
+  enroll.person = { id: person.id, name: person.name };
+  enroll.hint = `${person.name} cadastrado com ${vectors.length} fotos do rosto.`;
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Rostos: ${person.name} cadastrado (${vectors.length} fotos)`);
+  perfil?.event('rosto', `Pessoa conhecida cadastrada: ${person.name}`);
+  syncFaces();
+}
+function saveAvatar(id, aligned) {
+  return new Promise(ok => {
+    const ff = spawn(FFMPEG, ['-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '112x112', '-i', 'pipe:0', '-q:v', '4', '-y', path.join(AVATARS, id + '.jpg')]);
+    ff.on('close', ok); ff.on('error', ok); ff.stdin.end(Buffer.from(aligned));
+  });
+}
+
+// Dar nome à visita: o rosto visto bate com alguém conhecido? Desconhecido só depois de ver bem o rosto 3 vezes
+async function recognizeFrame(rgb, w, h) {
+  const v = presence.person.visit;
+  if (!v || v.pending) return;
+  const found = (await faces.detect(rgb, w, h, 0.8)).filter(f => f.box[2] >= 48).slice(0, 3);
+  let changed = false;
+  for (const face of found) {
+    const { vector } = await faces.embed(rgb, w, h, face);
+    const m = people.match(vector);
+    if (m.person) {
+      people.seen(m.person.id);
+      v.names = [...new Set([...(v.names || []), m.person.name])];
+      v.known = [...new Set([...(v.known || []), m.person.id])];
+      changed = true;
+    } else {
+      v.unknownFaces = (v.unknownFaces || 0) + 1;
+      changed = v.unknownFaces === 3;
+    }
+  }
+  if (!changed) return;
+  const where = perfil?.data.name || 'Câmera';
+  const names = v.names || [];
+  v.text = names.length ? `${names.join(' e ')} no ${where}` + (v.unknownFaces >= 3 ? ' (com alguém desconhecido)' : '')
+    : v.unknownFaces >= 3 ? `Pessoa desconhecida no ${where}` : v.text;
+  try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
+  broadcast({ type: 'activity', update: true, item: v });
+}
+
+function facesInfo() {
+  return { ok: true, available: !!faces, enrolling: enrollStatus(),
+    people: people.list().map(p => ({ id: p.id, name: p.name, samples: p.samples.length, consentAt: p.consentAt, lastSeen: p.lastSeen,
+      avatar: fs.existsSync(path.join(AVATARS, p.id + '.jpg')) ? `/api/faces/avatar/${p.id}.jpg` : null })) };
+}
+function serveAvatar(res, file) {
+  if (!/^[0-9a-f]{12}\.jpg$/.test(file)) return json(res, 404, { error: 'não encontrado' });
+  fs.readFile(path.join(AVATARS, file), (e, data) => {
+    if (e) return json(res, 404, { error: 'não encontrado' });
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache' });
     res.end(data);
   });
 }
@@ -1588,6 +1752,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (u.pathname.startsWith('/api/events/') && req.method === 'GET') return serveClip(req, res, decodeURIComponent(u.pathname.slice(12)));
     if (u.pathname.startsWith('/api/activity/') && req.method === 'GET') return serveThumb(res, decodeURIComponent(u.pathname.slice(14)));
+    if (u.pathname.startsWith('/api/faces/avatar/') && req.method === 'GET') return serveAvatar(res, decodeURIComponent(u.pathname.slice(18)));
     switch (u.pathname) {
       case '/api/events': {
         if (req.method === 'GET') return json(res, 200, clipsInfo());
@@ -1611,6 +1776,19 @@ const server = http.createServer(async (req, res) => {
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
       case '/api/activity/forget': { const b = await readBody(req); return json(res, 200, forgetActivity(b.at, b.type)); }
+      case '/api/faces': return json(res, 200, facesInfo());
+      case '/api/faces/enroll': {
+        if (req.method === 'GET') return json(res, 200, enrollStatus());
+        const b = await readBody(req);
+        return json(res, 200, b.cancel ? stopEnroll() : startEnroll(b.name, b.consent === true));
+      }
+      case '/api/faces/remove': {
+        const b = await readBody(req);
+        const ok = people.remove(String(b.id));
+        if (ok) { fs.rm(path.join(AVATARS, String(b.id).replace(/[^0-9a-f]/g, '') + '.jpg'), () => {}); perfil?.event('rosto', 'Pessoa conhecida removida'); syncFaces(); }
+        return json(res, 200, { ok, ...facesInfo() });
+      }
+      case '/api/faces/rename': { const b = await readBody(req); return json(res, 200, { ok: people.rename(String(b.id), b.name), ...facesInfo() }); }
       case '/api/screen/thumb': return serveCameraThumb(res);
       case '/api/protection': {
         if (req.method === 'POST') {

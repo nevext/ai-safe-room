@@ -6,7 +6,9 @@
 //     ritmo em que foi filmado, com atraso fixo);
 //   - quadros pequenos para a IA;
 //   - o som do microfone (PCM 8 kHz), para a TV tocar sem abrir outra conexão;
-//   - uma cópia crua do vídeo da câmera (sem reencodar) para o medidor da vistoria (server/quality.mjs).
+//   - uma cópia crua do vídeo da câmera (sem reencodar) para o medidor da vistoria (server/quality.mjs);
+//   - uma imagem grande (2048×1366, RGB) por segundo para os rostos: os quadros da IA são pequenos demais para
+//     reconhecer alguém de longe.
 // Cada tela que chega entra no próximo quadro inteiro; a que fica para trás pula para o ao vivo.
 // O ffmpeg só roda enquanto alguém assiste (tela ou IA) e volta sozinho se a câmera cair.
 
@@ -42,6 +44,8 @@ const listen = () => new Promise((ok, err) => {
 export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [1920, 1080], ai = [640, 720], aiFps = 5, meter = null, onViewers = null }) {
   const subs = Object.fromEntries(views.map(v => [v, new Set()]));
   const aiListeners = new Set();
+  const hiresListeners = new Set();   // os rostos: não ligam o ffmpeg sozinhos (vão junto com a IA ou uma tela)
+  const HIRES = [2048, 1366];
   const audioSubs = new Set();
   const tsTaps = Object.fromEntries(views.map(v => [v, new Set()]));   // quem guarda o vídeo (clipes): não liga o ffmpeg sozinho
   const stats = Object.fromEntries(views.map(v => [v, { fps: 0, kbps: 0, frames: 0, bytes: 0, lastData: 0, maxGapMs: 0 }]));
@@ -91,6 +95,20 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
     }
   }
 
+  // A imagem grande chega inteira, uma por segundo; sem ninguém pedindo, é lida e jogada fora (senão o ffmpeg trava)
+  function hiresReader(socket) {
+    const frameSize = HIRES[0] * HIRES[1] * 3;
+    let buf = Buffer.alloc(0);
+    socket.on('data', d => {
+      buf = buf.length ? Buffer.concat([buf, d]) : d;
+      while (buf.length >= frameSize) {
+        const frame = hiresListeners.size ? Buffer.from(buf.subarray(0, frameSize)) : null;
+        buf = buf.subarray(frameSize);
+        if (frame) for (const fn of hiresListeners) fn(frame, HIRES[0], HIRES[1]);
+      }
+    });
+  }
+
   function aiReader(socket) {
     const frameSize = ai[0] * ai[1] * 3;
     let buf = Buffer.alloc(0);
@@ -107,23 +125,26 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
   async function start() {
     if (ff || starting || !anyone()) return;
     const url = rtsp();
-    if (!url) return;
+    // Sem endereço ainda (a câmera conectando): tenta de novo, senão a IA ligada antes da câmera nunca abria o vídeo
+    if (!url) { clearTimeout(restart); restart = setTimeout(start, 3000); return; }
     starting = true;
     try {
-      const outputs = [...views.map(v => ({ v })), { v: 'ai' }, { v: 'audio' }, { v: 'meter' }];
+      const outputs = [...views.map(v => ({ v })), { v: 'ai' }, { v: 'audio' }, { v: 'meter' }, { v: 'hires' }];
       servers = await Promise.all(outputs.map(listen));
       outputs.forEach((o, i) => servers[i].on('connection', socket => {
         socket.on('error', () => {});
         if (o.v === 'ai') aiReader(socket);
         else if (o.v === 'audio') socket.on('data', d => { for (const res of audioSubs) if (res.writableLength < 64000) res.write(d); });
         else if (o.v === 'meter') socket.on('data', d => meter?.data(d));
+        else if (o.v === 'hires') hiresReader(socket);
         else socket.on('data', d => fanOut(o.v, d));
       }));
       const [w, h] = size;
       const fit = `scale=${w}:${h}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
       const chains = views.map((v, i) => `[s${i}]${v === 'top' ? 'crop=iw:ih/2:0:0,' : v === 'bottom' ? 'crop=iw:ih/2:0:ih/2,' : ''}${fit}[o${i}]`);
-      const graph = `[0:v]split=${views.length + 1}${views.map((_, i) => `[s${i}]`).join('')}[sa];` + chains.join(';')
-        + `;[sa]fps=${aiFps},scale=${ai[0]}:${ai[1]}[oa]`;
+      const graph = `[0:v]split=${views.length + 2}${views.map((_, i) => `[s${i}]`).join('')}[sa][sh];` + chains.join(';')
+        + `;[sa]fps=${aiFps},scale=${ai[0]}:${ai[1]}[oa]`
+        + `;[sh]fps=1,scale=${HIRES[0]}:${HIRES[1]}:force_original_aspect_ratio=decrease,pad=${HIRES[0]}:${HIRES[1]}[oh]`;
       const args = ['-loglevel', 'error', ...inputArgs, '-i', url, '-filter_complex', graph];
       views.forEach((v, i) => args.push('-map', `[o${i}]`, '-c:v', encoder.name, ...encoder.opts, '-profile:v', 'main', '-bf', '0',
         // -g 12: um quadro inteiro por segundo, então quem abre a imagem espera no máximo ~1 s
@@ -133,6 +154,7 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
       args.push('-map', '[oa]', '-f', 'rawvideo', '-pix_fmt', 'rgb24', `tcp://127.0.0.1:${servers[views.length].address().port}`);
       args.push('-map', '0:a?', '-c:a', 'pcm_s16le', '-ar', '8000', '-ac', '1', '-f', 's16le', `tcp://127.0.0.1:${servers[views.length + 1].address().port}`);
       args.push('-map', '0:v', '-c:v', 'copy', '-f', 'mpegts', '-muxdelay', '0', '-muxpreload', '0', `tcp://127.0.0.1:${servers[views.length + 2].address().port}`);
+      args.push('-map', '[oh]', '-f', 'rawvideo', '-pix_fmt', 'rgb24', `tcp://127.0.0.1:${servers[views.length + 3].address().port}`);
       let errors = '';
       ff = spawn(ffmpeg, args);
       ff.stderr.on('data', d => { errors = (errors + d).slice(-500); });
@@ -197,6 +219,11 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
     onTs(view, fn) {
       tsTaps[view]?.add(fn);
       return () => tsTaps[view]?.delete(fn);
+    },
+    /** A imagem grande (RGB, 1 por segundo) enquanto o vídeo roda por outro motivo; devolve a função que para. */
+    onHires(fn) {
+      hiresListeners.add(fn);
+      return () => hiresListeners.delete(fn);
     },
     /** Recebe os quadros da IA (RGB); devolve a função que para de receber. */
     onAiFrame(fn) {
