@@ -627,13 +627,34 @@ async function setNightVision(on) {
   return { ok: true };
 }
 
+// Luz branca (Camera.WhiteLight): ligada = acesa direto (KeepOpen, o dia todo: a câmera só obedece dentro do
+// WorkPeriod); desligada = só infravermelho à noite, sem luz branca (Infrared, 18h–6h, como ficou em 25/10).
+async function whiteLight() {
+  const r = await (await dvrSession()).request(1042, { Name: 'Camera.WhiteLight' });
+  return r['Camera.WhiteLight']?.WorkMode === 'KeepOpen';
+}
+async function setWhiteLight(on) {
+  const name = 'Camera.WhiteLight';
+  const session = await dvrSession();
+  const cur = (await session.request(1042, { Name: name }))[name];
+  if (!cur) return { ok: false, error: 'a câmera não respondeu' };
+  cur.WorkMode = on ? 'KeepOpen' : 'Infrared';
+  cur.WorkPeriod = on ? { EHour: 23, EMinute: 59, Enable: 1, SHour: 0, SMinute: 0 } : { EHour: 6, EMinute: 0, Enable: 1, SHour: 18, SMinute: 0 };
+  const r = await session.request(1040, { Name: name, [name]: cur });
+  if (Number(r.Ret) !== 100) return { ok: false, error: 'a câmera recusou (' + r.Ret + ')' };
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Luz branca: ${on ? 'acesa' : 'apagada'}`);
+  return { ok: true };
+}
+
 // O que a tela mostra no painel, na ordem. type: choice (options), level (min/max/step), toggle.
 async function screenControls() {
   if (!cam.addr) return [];
   // Só o que se usa: o resto (brilho, contraste, cor, nitidez, contraluz, vídeo, clipes) fica no navegador
   const night = cam.dvr ? await nightVision().catch(() => null) : null;
+  const light = cam.dvr ? await whiteLight().catch(() => null) : null;
   return [
     ...(night == null ? [] : [{ id: 'night', type: 'toggle', label: L('Visão noturna', 'Night vision'), value: night }]),
+    ...(light == null ? [] : [{ id: 'light', type: 'toggle', label: L('Luz branca', 'White light'), value: light }]),
     ...(PROFILE.ptz?.personFollow ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
   ];
 }
@@ -647,6 +668,7 @@ async function screenControl(id, value) {
       return setImaging({ ircut: String(value) });
     },
     night: () => setNightVision(!!value),
+    light: () => setWhiteLight(!!value),
     wdr: () => setImaging({ wdr: value ? 'ON' : 'OFF' }),
     brightness: () => setImaging({ brightness: +value }),
     contrast: () => setImaging({ contrast: +value }),
