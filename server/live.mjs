@@ -43,6 +43,7 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
   const subs = Object.fromEntries(views.map(v => [v, new Set()]));
   const aiListeners = new Set();
   const audioSubs = new Set();
+  const tsTaps = Object.fromEntries(views.map(v => [v, new Set()]));   // quem guarda o vídeo (clipes): não liga o ffmpeg sozinho
   const stats = Object.fromEntries(views.map(v => [v, { fps: 0, kbps: 0, frames: 0, bytes: 0, lastData: 0, maxGapMs: 0 }]));
   let ff = null, servers = [], starting = false, idle = null, restart = null, quitting = false;   // quitting: fomos nós que paramos
 
@@ -75,6 +76,7 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
       if (pid(p) === VIDEO_PID && unitStart(p)) s.frames++;
       if (key < 0 && keyStart(p)) key = i;
     }
+    for (const fn of tsTaps[view]) fn(d, key);
     for (const sub of subs[view]) {
       const res = sub.res;
       if (res.writableLength > 8e6) { res.destroy(); continue; }   // parou de ler
@@ -177,6 +179,14 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
       audioSubs.add(res);
       res.on('close', () => { audioSubs.delete(res); stopIfIdle(); });
       start();
+    },
+    /**
+     * Recebe o MPEG-TS da vista (pacotes inteiros; key = onde começa um quadro inteiro, ou -1) enquanto o
+     * ffmpeg roda por outro motivo; devolve a função que para. O pedaço é emprestado: copie se for guardar.
+     */
+    onTs(view, fn) {
+      tsTaps[view]?.add(fn);
+      return () => tsTaps[view]?.delete(fn);
     },
     /** Recebe os quadros da IA (RGB); devolve a função que para de receber. */
     onAiFrame(fn) {

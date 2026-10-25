@@ -241,6 +241,54 @@ $('#vRun')?.addEventListener('click', async function(){
   catch (e){ toast('Teste falhou: ' + e.message); }
   this.disabled = false; refreshVistoria();
 });
+
+// --- Eventos: os clipes de quando aparece alguém (GET/POST /api/events) ---
+const evDlg = $('#events');
+const when = t => new Date(t).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+async function showEvents(){
+  let info;
+  try { info = await api('/api/events'); } catch (e){ toast('Sem eventos: ' + e.message); return; }
+  $('#evState').textContent = info.enabled ? 'gravando' : 'desligado';
+  $('#evOn').checked = info.enabled;
+  $('#evOn').disabled = !info.available;
+  const list = $('#evList');
+  list.innerHTML = info.events.length ? '' : '<p class="v-sub">Nenhum clipe ainda.</p>';
+  for (const e of info.events){
+    const row = document.createElement('div');
+    row.className = 'ev-row';
+    row.innerHTML = `${e.thumb ? `<img src="${cfg.proxy + e.thumb}" alt="">` : '<div class="ev-nothumb"></div>'}`
+      + `<div class="ev-txt"><b>${e.label.pt}</b><span>${when(e.at)} · ${e.seconds ?? '?'} s</span></div>`
+      + `<button type="button" class="ev-del" aria-label="Apagar">🗑</button>`;
+    row.querySelector('img, .ev-nothumb').onclick = row.querySelector('.ev-txt').onclick = () => {
+      const v = $('#evVideo'); v.src = cfg.proxy + e.video; v.hidden = false; v.play().catch(() => {});
+    };
+    row.querySelector('.ev-del').onclick = async () => {
+      await api('/api/events', { method:'POST', body: JSON.stringify({ delete: e.id }) }).catch(() => {});
+      showEvents();
+    };
+    list.appendChild(row);
+  }
+}
+$('#miEvents')?.addEventListener('click', () => { menuDlg.close(); $('#evVideo').hidden = true; showEvents(); evDlg.showModal(); });
+evDlg?.addEventListener('close', () => { const v = $('#evVideo'); v.pause(); v.removeAttribute('src'); v.load(); });
+$('#evOn')?.addEventListener('change', async function(){
+  try {
+    await api('/api/events', { method:'POST', body: JSON.stringify({ enabled: this.checked }) });
+    toast(this.checked ? 'Grava um clipe quando aparecer alguém (fica 7 dias no PC).' : 'Clipes desligados.');
+  } catch (e){ toast(e.message); }
+  showEvents();
+});
+$('#evTest')?.addEventListener('click', async function(){
+  this.disabled = true;
+  try {
+    const r = await api('/api/events', { method:'POST', body: JSON.stringify({ test: true }) });
+    if (!r.ok) throw new Error(r.error);
+    toast('Gravando um clipe de teste (uns 10 s)…');
+    setTimeout(showEvents, 12000);
+  } catch (e){ toast('Não deu: ' + e.message); }
+  this.disabled = false;
+});
+api('/api/events').then(i => { const s = $('#evState'); if (s) s.textContent = i.enabled ? 'gravando' : 'desligado'; }).catch(() => {});
 $('#btnListen').onclick = (e) => toggleListen(e.currentTarget);
 $('#btnImg').onclick = openImaging;
 document.querySelectorAll('[data-ptz]').forEach(b => {

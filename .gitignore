@@ -12,3 +12,5 @@ Thumbs.db
 # modelo de IA (baixado na 1ª vez) e a câmera conectada por último (pode ter senha)
 server/models/
 server/state.json
+# clipes de quando aparece alguém (imagens de dentro de casa)
+server/eventos/

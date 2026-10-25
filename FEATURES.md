@@ -55,6 +55,10 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
 - [ ] Notificação quando detectar **pessoa** (som/vibração/destaque).
 - [ ] **Falar pela câmera** (push-to-talk pelo alto-falante) via DVRIP 34567.
 - [ ] Confirmar se há **motor PTZ** (provável câmera fixa → esconder o direcional).
+- [x] **Clipes de quando aparece alguém** (`server/clips.mjs`, menu ☰ → Eventos; na TV, "Gravar quando
+      aparecer alguém"): 5 s antes até 10 s depois (máx. 60 s), MP4 sem reencodar, com foto; 7 dias no PC.
+      Só quem *chega* gera clipe (quem fica parado, dormindo, não gera um atrás do outro). Desligado até ligar.
+      Testado com clipe de teste e com a regra simulada; falta ver um de verdade.
 - [ ] Gravação **agendada** / contínua com rotação de arquivos.
 - [ ] Reiniciar câmera / sincronizar hora / ligar-desligar OSD (data na imagem) via ONVIF.
 - [ ] Cartão SD: listar e reproduzir gravações que ficam na própria câmera (se houver slot).

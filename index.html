@@ -89,6 +89,7 @@
       <button type="button" class="menu-row" id="miDetect"><span>👁️</span> <span class="mr-label">Detecção de pessoas/animais</span><span class="mr-state" id="detState">desligado</span></button>
       <button type="button" class="menu-row" id="miAutoZoom"><span>🔍</span> <span class="mr-label">Zoom que acompanha</span><span class="mr-state" id="zoomState">desligado</span></button>
       <button type="button" class="menu-row" id="miFollow"><span>↗</span> <span class="mr-label">Seguir pessoa</span><span class="mr-state">desligado</span></button>
+      <button type="button" class="menu-row" id="miEvents"><span>🎞</span> <span class="mr-label">Eventos (clipes)</span><span class="mr-state" id="evState">…</span></button>
       <button type="button" class="menu-row" id="miVistoria"><span>📶</span> <span class="mr-label">Teste da câmera</span><span class="mr-state" id="vState">…</span></button>
       <button type="button" class="menu-row" id="miQuality"><span>✨</span> <span class="mr-label">Qualidade</span><span class="mr-state" id="qState">automática</span></button>
       <button type="button" class="menu-row" id="miImg"><span>🎚</span> Ajustes de imagem</button>
@@ -116,6 +117,18 @@
       <label class="slider">Saturação <output id="oS">50</output><input id="imgS" type="range" min="0" max="100" value="50"></label>
       <label class="slider">Nitidez <output id="oN">10</output><input id="imgN" type="range" min="0" max="100" value="10"></label>
       <menu><button value="cancel" class="primary">Concluir</button></menu>
+    </form>
+  </dialog>
+
+  <!-- Eventos: clipes de quando aparece alguém, guardados no PC por 7 dias (GET/POST /api/events) -->
+  <dialog id="events" class="sheet">
+    <form method="dialog">
+      <div class="grabber"></div>
+      <h2>Eventos</h2>
+      <label class="row-toggle">Gravar quando aparecer alguém<input id="evOn" type="checkbox" class="switch"></label>
+      <video id="evVideo" class="ev-video" controls playsinline hidden></video>
+      <div class="ev-list" id="evList"></div>
+      <menu><button value="cancel" class="ghost">Fechar</button><button type="button" id="evTest" class="primary">Gravar um teste</button></menu>
     </form>
   </dialog>
 

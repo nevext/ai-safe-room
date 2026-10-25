@@ -19,6 +19,7 @@ import { createLive, keyframeAt } from './live.mjs';
 import { dvrip } from './dvrip.mjs';
 import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
+import { createClips } from './clips.mjs';
 
 const PORT = 8787;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -475,6 +476,7 @@ function followPulse(dir, why) {
 }
 function resumeFollow() {
   if (follow.wanted && !follow.enabled && setFollow(true).enabled) console.log('Seguir pessoa: ligado (estava ligado antes)');
+  if (clipsOn.wanted) startAi();   // os clipes também precisam da IA olhando
 }
 function setFollow(enabled) {
   if (follow.wanted !== !!enabled) { follow.wanted = !!enabled; saveState(); }   // lembrado: volta ligado se o camera-ai reiniciar
@@ -488,15 +490,49 @@ function setFollow(enabled) {
 function startAi() {
   clearTimeout(ai.idle);
   if (ai.stop || !ai.model || !live) return;
-  ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => { ai.last = r; updateFollow(r); broadcast({ type: 'detections', ...r }); } }));
+  ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => {
+    ai.last = r; updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
+  } }));
 }
 function stopAiSoon() {
   clearTimeout(ai.idle);
-  ai.idle = setTimeout(() => { if (!ai.listeners.size && !follow.enabled && ai.stop) { ai.stop(); ai.stop = null; } }, 10000);
+  ai.idle = setTimeout(() => { if (!ai.listeners.size && !follow.enabled && !clipsOn.wanted && ai.stop) { ai.stop(); ai.stop = null; } }, 10000);
 }
 function broadcast(event) {
   const line = JSON.stringify(event) + '\n';
   for (const res of ai.listeners) res.write(line);
+}
+
+// ---------- Clipes de quando aparece alguém (server/clips.mjs) ----------
+// Desligado até alguém ligar (menu do navegador ou painel da TV): é a câmera de dentro de casa. Ligado, a IA
+// fica olhando o tempo todo e o clipe sai do vídeo que o ao vivo já faz (a vista inteira, as duas lentes).
+const clipsOn = { wanted: (() => { try { return !!JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).clips; } catch { return false; } })() };
+const clips = live ? createClips({
+  dir: path.join(HERE, 'eventos'), ffmpeg: FFMPEG,
+  onEvent: e => broadcast({ type: 'event', ...e }),
+}) : null;
+if (clips) live.onTs('whole', clips.ts);
+function setClips(enabled) {
+  if (clipsOn.wanted !== !!enabled) { clipsOn.wanted = !!enabled; saveState(); }
+  if (clipsOn.wanted) startAi(); else stopAiSoon();
+  return clipsInfo();
+}
+function clipsInfo() {
+  return { enabled: clipsOn.wanted, available: !!clips && !!ai.model, recording: !!clips?.recording, events: clips ? clips.list() : [] };
+}
+// Um clipe ou a foto dele, com Range (o <video> do navegador pede pedaços para poder avançar)
+function serveClip(req, res, rel) {
+  const f = clips?.file(rel);
+  if (!f) return json(res, 404, { error: 'clipe não encontrado' });
+  const size = fs.statSync(f).size, type = f.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg';
+  const range = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+  if (!range) {
+    res.writeHead(200, { 'content-type': type, 'content-length': size, 'accept-ranges': 'bytes', ...cors });
+    return fs.createReadStream(f).pipe(res);
+  }
+  const start = range[1] ? +range[1] : Math.max(0, size - +range[2]), end = range[1] && range[2] ? Math.min(+range[2], size - 1) : size - 1;
+  res.writeHead(206, { 'content-type': type, 'content-length': end - start + 1, 'content-range': `bytes ${start}-${end}/${size}`, 'accept-ranges': 'bytes', ...cors });
+  fs.createReadStream(f, { start, end }).pipe(res);
 }
 
 // O aviso de movimento da própria câmera (server/motion.mjs): vai para as telas junto com a IA.
@@ -546,6 +582,7 @@ async function screenControls() {
     level('sharpness', 'Sharpness', L('Nitidez', 'Sharpness'), s.sharpness),
     ...(s.wdr ? [{ id: 'wdr', type: 'toggle', label: L('Contraluz (WDR)', 'Backlight (WDR)'), value: s.wdr === 'ON' }] : []),
     ...(PROFILE.ptz?.personFollow ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
+    ...(clips && ai.model ? [{ id: 'clips', type: 'toggle', label: L('Gravar quando aparecer alguém', 'Record when someone shows up'), value: clipsOn.wanted }] : []),
   ];
 }
 
@@ -562,6 +599,7 @@ async function screenControl(id, value) {
     contrast: () => setImaging({ contrast: +value }),
     saturation: () => setImaging({ saturation: +value }),
     sharpness: () => setImaging({ sharpness: +value }),
+    clips: () => { setClips(!!value); return { ok: true }; },
     follow: () => {
       const state = setFollow(!!value);
       return state.enabled === !!value ? { ok: true } : { ok: false, error: state.reason || 'Seguir pessoa indisponível' };
@@ -685,6 +723,7 @@ async function screenInfo() {
     audio: live && PROFILE.audio?.microphone !== false ? { pcm: '/api/screen/audio', rate: 8000, channels: 1 } : null,
     controls: await screenControls().catch(() => []),
     motion: { active: motionWatch.active, last: motion.last },
+    events: clips ? { list: '/api/events', recording: clipsOn.wanted } : null,
     quality: { level: quality.level.level, label: quality.level.level ? LEVELS[quality.level.level] : null, vistoria: '/api/vistoria' },
   };
 }
@@ -770,7 +809,7 @@ function startDiscovery() {
 // endereço do perfil. Assim as telas acham a câmera pronta, sem abrir a interface no navegador antes.
 const STATE_FILE = path.join(HERE, 'state.json');
 function saveState() {
-  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted })); } catch {}
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, clips: clipsOn.wanted })); } catch {}
 }
 
 // ---------- Dia/noite por horário ----------
@@ -874,7 +913,15 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
   try {
+    if (u.pathname.startsWith('/api/events/') && req.method === 'GET') return serveClip(req, res, decodeURIComponent(u.pathname.slice(12)));
     switch (u.pathname) {
+      case '/api/events': {
+        if (req.method === 'GET') return json(res, 200, clipsInfo());
+        const b = await readBody(req);
+        if (b.test) return json(res, 200, clips?.test() ? { ok: true } : { ok: false, error: 'sem vídeo ao vivo agora (abra a câmera ou ligue a IA)' });
+        if (b.delete) return json(res, 200, { ok: !!clips?.remove(String(b.delete)) });
+        return json(res, 200, setClips(b.enabled));
+      }
       case '/api/connect': { const b = await readBody(req); return json(res, 200, await connect(b.addr, b.user, b.pass)); }
       case '/api/state':   return json(res, 200, publicState());
       case '/api/stream':  if (!HAS_FFMPEG) return json(res, 501, { error: 'sem ffmpeg; use snapshot' }); return startStream(res, u.searchParams.get('stream') || 'sub');
