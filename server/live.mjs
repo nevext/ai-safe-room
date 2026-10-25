@@ -5,7 +5,8 @@
 //     para levar a hora de cada quadro (a câmera manda em rajadas: com a hora, a tela mostra cada um no
 //     ritmo em que foi filmado, com atraso fixo);
 //   - quadros pequenos para a IA;
-//   - o som do microfone (PCM 8 kHz), para a TV tocar sem abrir outra conexão.
+//   - o som do microfone (PCM 8 kHz), para a TV tocar sem abrir outra conexão;
+//   - uma cópia crua do vídeo da câmera (sem reencodar) para o medidor da vistoria (server/quality.mjs).
 // Cada tela que chega entra no próximo quadro inteiro; a que fica para trás pula para o ao vivo.
 // O ffmpeg só roda enquanto alguém assiste (tela ou IA) e volta sozinho se a câmera cair.
 
@@ -36,13 +37,14 @@ const listen = () => new Promise((ok, err) => {
 /**
  * views: as vistas a gerar ('whole', 'top', 'bottom'). size: [largura, altura] máximos de cada vista.
  * ai: [largura, altura] dos quadros da IA (RGB). rtsp(): o endereço do vídeo principal agora.
+ * meter: o medidor da vistoria (createMeter), que recebe o vídeo como a câmera mandou.
  */
-export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [1920, 1080], ai = [640, 720], aiFps = 5 }) {
+export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [1920, 1080], ai = [640, 720], aiFps = 5, meter = null }) {
   const subs = Object.fromEntries(views.map(v => [v, new Set()]));
   const aiListeners = new Set();
   const audioSubs = new Set();
   const stats = Object.fromEntries(views.map(v => [v, { fps: 0, kbps: 0, frames: 0, bytes: 0, lastData: 0, maxGapMs: 0 }]));
-  let ff = null, servers = [], starting = false, idle = null, restart = null;
+  let ff = null, servers = [], starting = false, idle = null, restart = null, quitting = false;   // quitting: fomos nós que paramos
 
   const anyone = () => aiListeners.size > 0 || audioSubs.size > 0 || views.some(v => subs[v].size > 0);
 
@@ -106,12 +108,13 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
     if (!url) return;
     starting = true;
     try {
-      const outputs = [...views.map(v => ({ v })), { v: 'ai' }, { v: 'audio' }];
+      const outputs = [...views.map(v => ({ v })), { v: 'ai' }, { v: 'audio' }, { v: 'meter' }];
       servers = await Promise.all(outputs.map(listen));
       outputs.forEach((o, i) => servers[i].on('connection', socket => {
         socket.on('error', () => {});
         if (o.v === 'ai') aiReader(socket);
         else if (o.v === 'audio') socket.on('data', d => { for (const res of audioSubs) if (res.writableLength < 64000) res.write(d); });
+        else if (o.v === 'meter') socket.on('data', d => meter?.data(d));
         else socket.on('data', d => fanOut(o.v, d));
       }));
       const [w, h] = size;
@@ -126,12 +129,15 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
         `tcp://127.0.0.1:${servers[i].address().port}`));
       args.push('-map', '[oa]', '-f', 'rawvideo', '-pix_fmt', 'rgb24', `tcp://127.0.0.1:${servers[views.length].address().port}`);
       args.push('-map', '0:a?', '-c:a', 'pcm_s16le', '-ar', '8000', '-ac', '1', '-f', 's16le', `tcp://127.0.0.1:${servers[views.length + 1].address().port}`);
+      args.push('-map', '0:v', '-c:v', 'copy', '-f', 'mpegts', '-muxdelay', '0', '-muxpreload', '0', `tcp://127.0.0.1:${servers[views.length + 2].address().port}`);
       let errors = '';
       ff = spawn(ffmpeg, args);
       ff.stderr.on('data', d => { errors = (errors + d).slice(-500); });
       ff.on('error', () => {});
       ff.on('close', code => {
         ff = null;
+        meter?.dropped(!quitting);
+        quitting = false;
         for (const s of servers) s.close();
         servers = [];
         // Sempre com a hora: é por aqui que se descobre quando e por que a câmera derruba a conexão
@@ -149,6 +155,7 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
     idle = setTimeout(() => {
       if (anyone() || !ff) return;
       clearTimeout(restart);
+      quitting = true;
       try { ff.kill('SIGKILL'); } catch {}
     }, 10000);
   }
@@ -156,6 +163,8 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
   return {
     views,
     stats: () => stats,
+    /** Conectado na câmera agora (alguém assistindo ou a IA ligada). */
+    get active() { return !!ff; },
     /** Manda a vista para esta resposta HTTP (H.264, a partir do próximo quadro inteiro). */
     watch(view, res) {
       const sub = { res, waiting: true };
@@ -175,6 +184,6 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
       start();
       return () => { aiListeners.delete(fn); stopIfIdle(); };
     },
-    restart() { if (ff) try { ff.kill('SIGKILL'); } catch {} },
+    restart() { if (ff) { quitting = true; try { ff.kill('SIGKILL'); } catch {} } },
   };
 }

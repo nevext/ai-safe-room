@@ -131,6 +131,10 @@ repositório de cada um e os termos dos dados de treino.
 ## Como vai ser feito (fases)
 
 1. **Vistoria e níveis no nevtv** ("Testar minha câmera"): vídeo, medição, nível, dicas. Usa o que já existe.
+   A medição e o nível já estão no camera-ai (`server/quality.mjs`, `/api/vistoria`, 25/10/2026);
+   primeira medida da câmera de teste, à noite: 12,5 de 12,4 quadros/s, 1,1 Mbps no grande e 0,1 no
+   pequeno, rajadas de 0,4 s, sem perdas nem travadas = Nível 3. Falta a tela no nevtv e a versão que
+   roda sem o PC (o mesmo medidor no app/TV).
 2. **Seguir digital** na tela (zoom que acompanha o quadrado da IA) e **escolha automática do vídeo**
    (grande ou pequeno) pelo nível.
 3. **Trocar o modelo de IA** por um Apache 2.0 (RF-DETR ou D-FINE) e medir na câmera de teste.

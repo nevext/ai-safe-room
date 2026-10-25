@@ -85,6 +85,7 @@
       <h2>Menu</h2>
       <button type="button" class="menu-row" id="miDetect"><span>👁️</span> <span class="mr-label">Detecção de pessoas/animais</span><span class="mr-state" id="detState">desligado</span></button>
       <button type="button" class="menu-row" id="miFollow"><span>↗</span> <span class="mr-label">Seguir pessoa</span><span class="mr-state">desligado</span></button>
+      <button type="button" class="menu-row" id="miVistoria"><span>📶</span> <span class="mr-label">Teste da câmera</span><span class="mr-state" id="vState">…</span></button>
       <button type="button" class="menu-row" id="miQuality"><span>✨</span> <span class="mr-label">Qualidade</span><span class="mr-state" id="qState">automática</span></button>
       <button type="button" class="menu-row" id="miImg"><span>🎚</span> Ajustes de imagem</button>
       <button type="button" class="menu-row" id="miSettings"><span>⚙️</span> Configurações</button>
@@ -111,6 +112,20 @@
       <label class="slider">Saturação <output id="oS">50</output><input id="imgS" type="range" min="0" max="100" value="50"></label>
       <label class="slider">Nitidez <output id="oN">10</output><input id="imgN" type="range" min="0" max="100" value="10"></label>
       <menu><button value="cancel" class="primary">Concluir</button></menu>
+    </form>
+  </dialog>
+
+  <!-- Vistoria: o quanto a câmera entrega de verdade e o nível (GET/POST /api/vistoria) -->
+  <dialog id="vistoria" class="sheet">
+    <form method="dialog">
+      <div class="grabber"></div>
+      <h2>Teste da câmera</h2>
+      <div class="v-level" id="vLevel" data-level="">—</div>
+      <p class="v-sub" id="vSub"></p>
+      <dl class="v-measures" id="vMeasures"></dl>
+      <ul class="v-checks" id="vChecks"></ul>
+      <ul class="v-tips" id="vTips"></ul>
+      <menu><button value="cancel" class="ghost">Fechar</button><button type="button" id="vRun" class="primary">Testar agora (1 min)</button></menu>
     </form>
   </dialog>
 

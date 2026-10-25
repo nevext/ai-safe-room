@@ -53,6 +53,11 @@ claro/escuro automático).
   `h264`: H.264 de baixo atraso na placa de vídeo (NVENC/QSV/AMF, ou x264 no processador), ~3 Mbps,
   **~1 s de atraso**; se a tela ficar para trás, a conexão fecha e ela reconecta no ao vivo. `mjpeg`:
   JPEG a JPEG, sempre o mais novo (os do meio são pulados), para navegador e TVs sem H.264.
+- `GET /api/vistoria`: o teste da câmera. Nível (1 Básico, 2 Bom, 3 Completo), as medidas da entrega de
+  verdade (quadros/s que chegam × filmados, Mbps, rajadas, perdas, travadas, quedas na última hora), a
+  lista do que a câmera tem e dicas. Medido em segundo plano enquanto o vídeo está aberto; o nível
+  também vem em `GET /api/screen` (`quality`). `POST /api/vistoria` `{seconds}`: teste completo, vídeo
+  grande e pequeno (o pequeno só com a câmera livre: ela não aguenta duas conexões).
 - Descoberta: a TV manda `camera-ai?` em broadcast UDP na **porta 8788** e recebe
   `{hub, port, serial, hosts}`.
 - Ao ligar, o proxy conecta sozinho: `CAMERA=ip`, ou a última câmera (`server/state.json`), ou a

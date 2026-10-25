@@ -134,3 +134,15 @@ menu button{flex:1;border:0;border-radius:14px;padding:14px;font-size:16px;font-
   background:rgba(40,40,42,.96);color:#fff;padding:12px 18px;border-radius:14px;font-size:14px;max-width:90vw;
   opacity:0;pointer-events:none;transition:.25s;z-index:30;box-shadow:0 10px 30px rgba(0,0,0,.4);backdrop-filter:blur(10px)}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* Teste da câmera (vistoria) */
+.v-level{font-size:26px;font-weight:700;text-align:center;letter-spacing:-.02em;color:var(--muted)}
+.v-level[data-level="3"]{color:var(--ok)}.v-level[data-level="2"]{color:var(--accent)}.v-level[data-level="1"]{color:var(--warn)}
+.v-sub{text-align:center;color:var(--muted);font-size:13px;margin:4px 0 14px;min-height:18px}
+.v-measures{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}
+.v-measures div{background:var(--fill);border-radius:12px;padding:9px 10px;min-width:0}
+.v-measures dt{font-size:11px;color:var(--muted)}.v-measures dd{margin:2px 0 0;font:600 15px/1.2 var(--mono)}
+.v-checks{list-style:none;margin:0 0 12px;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px}
+.v-checks li::before{content:"✅ "}.v-checks li.no{color:var(--muted)}.v-checks li.no::before{content:"❌ "}
+.v-tips{margin:0 0 14px;padding-left:18px;font-size:13px;color:var(--ink)}
+.mr-state[data-level="3"]{color:var(--ok)}.mr-state[data-level="1"]{color:var(--warn)}

@@ -206,6 +206,41 @@ $('#miFollow')?.addEventListener('click', async function(){
     toast(state.enabled ? 'Seguir pessoa ligado. Volta ao preset 1 após 12 s sem detecção.' : 'Seguir pessoa desligado.');
   } catch (e) { toast('Não foi possível seguir: ' + e.message); }
 });
+// O estado do seguir mora no camera-ai (lembrado entre reinícios): mostrar o de verdade
+api('/api/follow').then(st => {
+  const row = $('#miFollow'); if (!row) return;
+  row.classList.toggle('is-active', st.enabled);
+  row.querySelector('.mr-state').textContent = st.enabled ? 'ligado' : 'desligado';
+}).catch(() => {});
+
+// --- Teste da câmera (vistoria) ---
+const vDlg = $('#vistoria');
+function showVistoria(v){
+  const lv = v.level, lbl = v.label;
+  $('#vState').textContent = lv ? 'nível ' + lv : '—';
+  $('#vState').dataset.level = lv || '';
+  if (!vDlg) return;
+  $('#vLevel').textContent = lbl ? lbl.pt : 'Ainda medindo…';
+  $('#vLevel').dataset.level = lv || '';
+  const n = v.now || v.test?.streams?.main;
+  $('#vSub').textContent = v.testing ? 'Testando a câmera (uns 60 s)…'
+    : n?.reasons?.length ? n.reasons.join(' · ')
+    : v.measuring ? 'Medindo o tempo todo enquanto o vídeo está aberto.' : 'Sem vídeo aberto agora: use “Testar agora”.';
+  const m = n ? [['Quadros/s', n.fps + (n.filmedFps ? ' / ' + n.filmedFps : '')], ['Banda', (n.kbps / 1000).toFixed(1) + ' Mbps'],
+    ['Rajadas', (n.burstMs / 1000).toFixed(1) + ' s'], ['Perdidos', n.lostPct + '%'], ['Travadas', n.stalls], ['Quedas (1 h)', n.reconnectsLastHour]] : [];
+  $('#vMeasures').innerHTML = m.map(([k, x]) => `<div><dt>${k}</dt><dd>${x}</dd></div>`).join('');
+  $('#vChecks').innerHTML = (v.checks || []).map(c => `<li class="${c.ok ? '' : 'no'}">${c.label.pt}</li>`).join('');
+  $('#vTips').innerHTML = (v.tips || []).map(t => `<li>${t}</li>`).join('');
+}
+const refreshVistoria = () => api('/api/vistoria').then(showVistoria).catch(() => {});
+refreshVistoria(); setInterval(refreshVistoria, 15000);
+$('#miVistoria')?.addEventListener('click', () => { menuDlg.close(); refreshVistoria(); vDlg.showModal(); });
+$('#vRun')?.addEventListener('click', async function(){
+  this.disabled = true; $('#vSub').textContent = 'Testando a câmera (uns 60 s)…';
+  try { await api('/api/vistoria', { method:'POST', body: JSON.stringify({ seconds: 30 }) }); }
+  catch (e){ toast('Teste falhou: ' + e.message); }
+  this.disabled = false; refreshVistoria();
+});
 $('#btnListen').onclick = (e) => toggleListen(e.currentTarget);
 $('#btnImg').onclick = openImaging;
 document.querySelectorAll('[data-ptz]').forEach(b => {

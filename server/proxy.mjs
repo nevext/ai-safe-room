@@ -17,6 +17,7 @@ import os from 'node:os';
 import { loadModel, analyzer } from './ai.mjs';
 import { createLive, keyframeAt } from './live.mjs';
 import { dvrip } from './dvrip.mjs';
+import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 
 const PORT = 8787;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -389,8 +390,9 @@ const MODEL_DIR = path.join(HERE, 'models');
 const ai = { status: 'loading', model: null, stop: null, last: null, listeners: new Set(), idle: null };
 
 // A conexão única com a câmera (server/live.mjs): telas e IA saem todas dela.
+const meter = createMeter();
 const live = HAS_FFMPEG && H264 ? createLive({
-  ffmpeg: FFMPEG, inputArgs: LIVE_IN, rtsp: () => mainProfile()?.rtsp, encoder: H264,
+  ffmpeg: FFMPEG, inputArgs: LIVE_IN, rtsp: () => mainProfile()?.rtsp, encoder: H264, meter,
   views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'],
   aiFps: 10,   // a IA fica só com o quadro mais novo: num detector lento, ela mesma analisa menos
 }) : null;
@@ -556,6 +558,106 @@ async function screenControl(id, value) {
   return { ok: true, controls: await screenControls() };
 }
 
+// ---------- Vistoria: o nível da câmera (server/quality.mjs) ----------
+// Em segundo plano: enquanto o vídeo ao vivo roda (alguém assistindo ou o seguir ligado), o medidor
+// olha o vídeo como a câmera manda e o nível é reavaliado a cada 10 s. Não abre conexão a mais.
+const quality = { level: createLevel(), last: null, test: null, testing: false };
+setInterval(() => {
+  if (!live?.active) return;
+  const s = meter.summary();
+  const g = grade(s);
+  if (!g) return;
+  const before = quality.level.level;
+  const now = quality.level.push(g);
+  quality.last = { at: Date.now(), stream: 'main', ...s, ...g };
+  if (before !== null && now !== before)
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria: ${LEVELS[before].pt} → ${LEVELS[now].pt} (${g.reasons.join('; ') || 'estável'})`);
+}, 10000);
+
+// Mede um vídeo da câmera por uma conexão própria (só quando o ao vivo não está usando a câmera:
+// ela não aguenta duas). Devolve o resumo da medição.
+function measureStream(rtsp, seconds) {
+  return new Promise(ok => {
+    const m = createMeter({ windowSec: seconds + 5 });
+    const ff = spawn(FFMPEG, ['-loglevel', 'error', ...LIVE_IN, '-i', rtsp, '-map', '0:v', '-c:v', 'copy', '-f', 'mpegts', 'pipe:1']);
+    const started = Date.now();
+    ff.stdout.on('data', d => m.data(d));
+    ff.on('error', () => {});
+    const timer = setTimeout(() => ff.kill('SIGKILL'), seconds * 1000);
+    ff.on('close', () => {
+      clearTimeout(timer);
+      const s = m.summary();
+      ok(s && Date.now() - started >= seconds * 900 ? s : s ? { ...s, droppedEarly: true } : null);
+    });
+  });
+}
+
+// O teste completo ("Teste sua câmera"): vídeo grande e pequeno, ~30 s cada.
+async function runVistoria(seconds = 30) {
+  if (quality.testing) return { error: 'já testando' };
+  if (!cam.addr) return { error: 'sem câmera' };
+  quality.testing = true;
+  try {
+    const result = { at: Date.now(), streams: {} };
+    for (const [name, prof] of [['main', mainProfile()], ['sub', subProfile()]]) {
+      if (!prof?.rtsp) continue;
+      if (name === 'main' && live?.active) {
+        // O ao vivo já está conectado no vídeo grande: mede por ele (abrir outra conexão derrubaria os dois)
+        await new Promise(r => setTimeout(r, seconds * 1000));
+        result.streams.main = { via: 'ao vivo', ...meter.summary(), ...grade(meter.summary()) };
+      } else if (live?.active) {
+        result.streams[name] = { skipped: 'a câmera está em uso pelo ao vivo; ela não aguenta duas conexões' };
+      } else {
+        const s = await measureStream(prof.rtsp, seconds);
+        result.streams[name] = s ? { ...s, ...grade(s) } : { failed: 'a câmera não mandou vídeo' };
+      }
+      result.streams[name].resolution = prof.resolution;
+      result.streams[name].configuredFps = +prof.fps || null;
+    }
+    // Nível: 3 se o grande vai liso; 2 se o grande ou o pequeno funciona; 1 se nada vai bem.
+    const main = result.streams.main?.level, sub = result.streams.sub?.level;
+    result.level = main === 3 ? 3 : (main >= 2 || sub >= 2) ? 2 : (main || sub) ? 1 : null;
+    quality.test = result;
+    if (result.level) quality.level.push({ level: result.level });
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria completa: ${result.level ? LEVELS[result.level].pt : 'sem vídeo'}`);
+    return result;
+  } finally {
+    quality.testing = false;
+  }
+}
+
+// O que a câmera tem: a lista ✅/❌ da vistoria.
+async function cameraChecks() {
+  const img = cam.addr ? await getImaging().catch(() => null) : null;
+  const events = PROFILE.events || [];
+  return [
+    { id: 'video', label: L('Vídeo ao vivo', 'Live video'), ok: !!mainProfile()?.rtsp },
+    { id: 'onvif', label: L('Padrão aberto (ONVIF)', 'Open standard (ONVIF)'), ok: !!cam.addr },
+    { id: 'imaging', label: L('Ajustes de imagem', 'Image settings'), ok: !!img },
+    { id: 'daynight', label: L('Dia/noite', 'Day/night'), ok: !!img?.ircut },
+    { id: 'motion', label: L('Aviso de movimento da câmera', 'Camera motion alerts'), ok: events.some(e => /Motion/i.test(e)) },
+    { id: 'camPerson', label: L('A câmera detecta pessoa sozinha', 'Camera detects people'), ok: events.some(e => /People|Human|Person/i.test(e)) },
+    { id: 'ai', label: L('IA de pessoa e animal (camera-ai)', 'Person/animal AI (camera-ai)'), ok: ai.status === 'on' },
+    { id: 'motor', label: L('Motor (girar a lente)', 'Motor (pan/tilt)'), ok: !!cam.dvr && !!PROFILE.ptz?.personFollow },
+    { id: 'audio', label: L('Microfone', 'Microphone'), ok: PROFILE.audio?.microphone !== false && !!live },
+  ];
+}
+
+async function vistoriaInfo() {
+  const level = quality.level.level;
+  const s = quality.last;
+  return {
+    level, label: level ? LEVELS[level] : null,
+    testing: quality.testing,
+    measuring: !!live?.active,
+    now: s ? { fps: s.fps, filmedFps: s.filmedFps, kbps: s.kbps, lostPct: s.lostPct, burstMs: s.burstMs, maxGapMs: s.maxGapMs,
+      stalls: s.stalls, reconnectsLastHour: s.reconnectsLastHour, reasons: s.reasons, at: s.at } : null,
+    test: quality.test,
+    checks: await cameraChecks(),
+    tips: tips(s || quality.test?.streams?.main, level),
+  };
+}
+
 async function screenInfo() {
   return {
     version: SCREEN_VERSION, hub: 'camera-ai',
@@ -567,6 +669,7 @@ async function screenInfo() {
     ai: { status: ai.status, model: ai.model?.name || null, device: ai.model?.device || null, events: '/api/screen/events' },
     audio: live && PROFILE.audio?.microphone !== false ? { pcm: '/api/screen/audio', rate: 8000, channels: 1 } : null,
     controls: await screenControls().catch(() => []),
+    quality: { level: quality.level.level, label: quality.level.level ? LEVELS[quality.level.level] : null, vistoria: '/api/vistoria' },
   };
 }
 
@@ -770,6 +873,7 @@ const server = http.createServer(async (req, res) => {
         { const b = await readBody(req); return json(res, 200, await setImaging(b)); }
       case '/api/daynight': { const b = await readBody(req); return json(res, 200, await screenControl('ircut', b.mode)); }
       case '/api/audio':   return startAudio(res);
+      case '/api/vistoria': return json(res, 200, req.method === 'POST' ? await runVistoria(Math.min(60, Math.max(10, +(await readBody(req)).seconds || 30))) : await vistoriaInfo());
       case '/api/screen':  return json(res, 200, await screenInfo());
       case '/api/screen/control': { const b = await readBody(req); return json(res, 200, await screenControl(b.id, b.value)); }
       case '/api/screen/events': return screenEvents(req, res);

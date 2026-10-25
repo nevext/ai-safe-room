@@ -16,7 +16,16 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
 - [x] **Detecção por IA no camera-ai** (pessoa=verde, animal=laranja, incerto=vermelho): roda no
       PC (`server/ai.mjs`) e vai para todas as telas; o navegador só desenha. YOLO11s na placa de
       vídeo (~12 ms, 10 análises/s), COCO-SSD de reserva.
-- [ ] **Seguir pessoa (implementado; falta validar na câmera):** a IA acompanha a pessoa pela lente fixa, move a lente inferior pelo DVRIP e volta ao preset 1 após 12 s sem detecção. O rastreamento de fábrica permanece desligado.
+- [ ] **Seguir pessoa (motor validado; falta o teste com alguém andando):** a IA acompanha a pessoa,
+      move a lente inferior pelo DVRIP e volta ao preset 1 após 12 s sem detecção (conferido). Direções
+      conferidas na câmera (pulso de 450 ms ≈ 1/4 da imagem). Cada movimento vai para o log. Fica
+      lembrado entre reinícios. O rastreamento de fábrica permanece desligado.
+- [x] **Teste da câmera (vistoria) e níveis** (`/api/vistoria`, menu ☰ → Teste da câmera): mede o
+      vídeo como a câmera manda (quadros que chegam × filmados, rajadas, perdas, travadas, quedas), sem
+      abrir conexão a mais; nível 1/2/3 em segundo plano (desce em ~30 s, sobe após 10 min estável);
+      "Testar agora" mede o vídeo grande e o pequeno, 30 s cada, quando a câmera está livre.
+- [x] Reconexão: a sessão DVRIP se refaz sozinha, e se a câmera some ~90 s o camera-ai a procura de
+      novo na rede (ela pode voltar com outro IP).
 - [x] **API das telas** (`/api/screen`): as TVs com o nevtv mostram a câmera com vídeo nítido, IA e
       os controles que o camera-ai listar; sem o PC, seguem direto da câmera (sem IA).
 - [x] Interface estilo nevext (Geist, azul #2563eb), player com controles que somem,
@@ -49,7 +58,6 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
 - [ ] Filtro de nitidez opcional no vídeo.
 
 ### Robustez / produto
-- [ ] Reconexão automática se o stream cair.
 - [ ] Suporte a **mais de uma câmera** (grade / troca) quando houver outro aparelho.
 - [ ] Autenticação na interface (hoje qualquer um na rede acessa o proxy).
 - [ ] Empacotar o proxy como serviço (iniciar junto com o Windows).
