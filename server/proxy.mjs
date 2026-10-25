@@ -394,7 +394,7 @@ const ai = { status: 'loading', model: null, stop: null, last: null, listeners: 
 // A conexão única com a câmera (server/live.mjs): telas e IA saem todas dela.
 const meter = createMeter();
 const live = HAS_FFMPEG && H264 ? createLive({
-  ffmpeg: FFMPEG, inputArgs: LIVE_IN, rtsp: () => mainProfile()?.rtsp, encoder: H264, meter,
+  ffmpeg: FFMPEG, inputArgs: LIVE_IN, rtsp: () => (videoPick.using = pickedStream()) === 'sub' ? subProfile()?.rtsp : mainProfile()?.rtsp, encoder: H264, meter,
   views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'],
   aiFps: 10,   // a IA fica só com o quadro mais novo: num detector lento, ela mesma analisa menos
 }) : null;
@@ -582,6 +582,10 @@ async function screenControls() {
     level('sharpness', 'Sharpness', L('Nitidez', 'Sharpness'), s.sharpness),
     ...(s.wdr ? [{ id: 'wdr', type: 'toggle', label: L('Contraluz (WDR)', 'Backlight (WDR)'), value: s.wdr === 'ON' }] : []),
     ...(PROFILE.ptz?.personFollow ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
+    { id: 'video', type: 'choice', label: L('Vídeo da câmera', 'Camera video'), value: videoPick.choice,
+      options: [
+        { value: 'auto', label: L(`Automático (${videoPick.using === 'sub' ? 'pequeno' : 'grande'})`, `Automatic (${videoPick.using === 'sub' ? 'small' : 'big'})`) },
+        { value: 'main', label: L('Grande (nítido)', 'Big (sharp)') }, { value: 'sub', label: L('Pequeno (leve)', 'Small (light)') }] },
     ...(clips && ai.model ? [{ id: 'clips', type: 'toggle', label: L('Gravar quando aparecer alguém', 'Record when someone shows up'), value: clipsOn.wanted }] : []),
   ];
 }
@@ -600,6 +604,13 @@ async function screenControl(id, value) {
     saturation: () => setImaging({ saturation: +value }),
     sharpness: () => setImaging({ sharpness: +value }),
     clips: () => { setClips(!!value); return { ok: true }; },
+    video: () => {
+      if (!['auto', 'main', 'sub'].includes(String(value))) return { ok: false, error: 'vídeo desconhecido' };
+      videoPick.choice = String(value);
+      saveState();
+      applyVideoPick();
+      return { ok: true };
+    },
     follow: () => {
       const state = setFollow(!!value);
       return state.enabled === !!value ? { ok: true } : { ok: false, error: state.reason || 'Seguir pessoa indisponível' };
@@ -618,14 +629,31 @@ const quality = { level: createLevel(), last: null, test: null, testing: false }
 setInterval(() => {
   if (!live?.active) return;
   const s = meter.summary();
-  const g = grade(s);
+  let g = grade(s);
   if (!g) return;
+  // No vídeo pequeno, liso é no máximo Nível 2: o 3 é o grande liso. Assim, 10 min estável no pequeno sobe
+  // para o 2, e o automático volta a tentar o grande
+  if (videoPick.using === 'sub' && g.level === 3) g = { ...g, level: 2 };
   const before = quality.level.level;
   const now = quality.level.push(g);
-  quality.last = { at: Date.now(), stream: 'main', ...s, ...g };
+  quality.last = { at: Date.now(), stream: videoPick.using, ...s, ...g };
   if (before !== null && now !== before)
     console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria: ${LEVELS[before].pt} → ${LEVELS[now].pt} (${g.reasons.join('; ') || 'estável'})`);
+  applyVideoPick();
 }, 10000);
+
+// Qual vídeo da câmera o ao vivo puxa: no automático, o pequeno só no Nível 1 (a câmera engasgando no grande).
+const videoPick = { choice: (() => { try { return JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).video || 'auto'; } catch { return 'auto'; } })(), using: 'main' };
+function pickedStream() {
+  if (videoPick.choice !== 'auto') return videoPick.choice;
+  return quality.level.level === 1 && subProfile() !== mainProfile() ? 'sub' : 'main';
+}
+function applyVideoPick() {
+  const want = pickedStream();
+  if (!live?.active || want === videoPick.using) return;
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Vídeo da câmera: ${want === 'sub' ? 'pequeno' : 'grande'} (${videoPick.choice === 'auto' ? 'automático, ' + LEVELS[quality.level.level]?.pt : 'escolhido'})`);
+  live.restart();   // volta sozinho em 2 s, já no outro vídeo
+}
 
 // Mede um vídeo da câmera por uma conexão própria (só quando o ao vivo não está usando a câmera:
 // ela não aguenta duas). Devolve o resumo da medição.
@@ -809,7 +837,7 @@ function startDiscovery() {
 // endereço do perfil. Assim as telas acham a câmera pronta, sem abrir a interface no navegador antes.
 const STATE_FILE = path.join(HERE, 'state.json');
 function saveState() {
-  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, clips: clipsOn.wanted })); } catch {}
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, clips: clipsOn.wanted, video: videoPick.choice })); } catch {}
 }
 
 // ---------- Dia/noite por horário ----------

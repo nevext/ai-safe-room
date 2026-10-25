@@ -136,10 +136,12 @@ os termos dos dados de treino (COCO).
 1. **Vistoria e níveis no nevtv** ("Testar minha câmera"): vídeo, medição, nível, dicas. Usa o que já existe.
    A medição e o nível já estão no camera-ai (`server/quality.mjs`, `/api/vistoria`, 25/10/2026);
    primeira medida da câmera de teste, à noite: 12,5 de 12,4 quadros/s, 1,1 Mbps no grande e 0,1 no
-   pequeno, rajadas de 0,4 s, sem perdas nem travadas = Nível 3. Falta a tela no nevtv e a versão que
-   roda sem o PC (o mesmo medidor no app/TV).
+   pequeno, rajadas de 0,4 s, sem perdas nem travadas = Nível 3. No nevtv: o nível nas informações e o
+   "Teste da câmera" no painel (branch `camera-vistoria`). Falta a versão que roda sem o PC (o mesmo medidor
+   no app/TV).
 2. **Seguir digital** na tela (zoom que acompanha o quadrado da IA) e **escolha automática do vídeo**
-   (grande ou pequeno) pelo nível.
+   (grande ou pequeno) pelo nível. Feito em 25/10/2026: zoom que acompanha no navegador e no nevtv; o
+   camera-ai troca para o vídeo pequeno no Nível 1 (controle "Vídeo da câmera").
 3. **Trocar o modelo de IA** por um Apache 2.0 (RF-DETR ou D-FINE) e medir na câmera de teste.
    Feito em 25/10/2026: RF-DETR medium (ver "Licença da IA").
 4. **App AI Safe Cam no celular:** conectar câmera, vistoria, ao vivo, avisos; o nevtv como "TV que vigia".

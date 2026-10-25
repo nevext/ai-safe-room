@@ -138,12 +138,14 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
       ff.on('error', () => {});
       ff.on('close', code => {
         ff = null;
-        meter?.dropped(!quitting);
+        const ours = quitting;
+        meter?.dropped(!ours);
         quitting = false;
         for (const s of servers) s.close();
         servers = [];
         // Sempre com a hora: é por aqui que se descobre quando e por que a câmera derruba a conexão
-        console.log(`${new Date().toLocaleTimeString('pt-BR')} vídeo ao vivo parou (código ${code}): ${errors.trim() || 'a câmera fechou a conexão'}`);
+        if (ours) console.log(`${new Date().toLocaleTimeString('pt-BR')} vídeo ao vivo parado pelo camera-ai (ninguém assistindo ou troca de vídeo)`);
+        else console.log(`${new Date().toLocaleTimeString('pt-BR')} vídeo ao vivo parou (código ${code}): ${errors.trim() || 'a câmera fechou a conexão'}`);
         if (anyone()) restart = setTimeout(start, 2000);   // a câmera caiu ou reiniciou: de novo
       });
       console.log(`${new Date().toLocaleTimeString('pt-BR')} vídeo ao vivo: 1 conexão com a câmera para ${views.join(', ')} e a IA`);

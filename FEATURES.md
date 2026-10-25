@@ -25,6 +25,9 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       vídeo como a câmera manda (quadros que chegam × filmados, rajadas, perdas, travadas, quedas), sem
       abrir conexão a mais; nível 1/2/3 em segundo plano (desce em ~30 s, sobe após 10 min estável);
       "Testar agora" mede o vídeo grande e o pequeno, 30 s cada, quando a câmera está livre.
+- [x] **Vídeo da câmera pelo nível** (controle "Vídeo da câmera": Automático / Grande / Pequeno): no
+      automático, o ao vivo puxa o vídeo pequeno só no Nível 1 e volta a tentar o grande depois de 10 min
+      estável no pequeno. Conferido: pequeno ~0,1 Mbps, grande ~1,1 Mbps (à noite).
 - [x] Reconexão: a sessão DVRIP se refaz sozinha, e se a câmera some ~90 s o camera-ai a procura de
       novo na rede (ela pode voltar com outro IP).
 - [x] **Zoom que acompanha (seguir digital)** no navegador (menu ☰): amplia em volta das pessoas
