@@ -136,6 +136,38 @@ Tudo em `index.html` + `assets/app.css`; lógica em `assets/app.js`.
 > Upscaling AI por frame ao vivo não é viável no navegador/celular; o ganho vem de usar o
 > stream de alta resolução na lente única.
 
+### Na TV (nevtv, 2026-10-24)
+
+O nevtv (home screen para Google TV/Android TV, repo `C:\dev\nevtv`) mostra esta câmera em
+*gaveta → Câmeras*. Três travas apareceram, e o nevtv resolve as três sozinho, **em qualquer
+TV que tenha o nevtv** (está no app, não na TV):
+
+1. **Android bloqueia HTTP sem criptografia.** ONVIF é HTTP puro, e o app tem
+   `usesCleartextTraffic="false"`, então o Android recusava toda conversa com a câmera
+   (`Cleartext HTTP traffic to 192.168.0.42 not permitted`). Isso aparecia como "pede usuário
+   e senha", mas nenhuma senha funcionaria. **Solução:** `Onvif.call` fala HTTP/1.0 direto num
+   socket, e só com endereços da rede de casa (site-local/link-local); o resto do app segue
+   proibindo HTTP aberto.
+2. **Login.** Esta câmera não tem senha (admin/vazio). O nevtv tenta primeiro **sem login** e só
+   pergunta se a câmera recusar. O login, quando existe, fica guardado com a câmera (pede uma vez).
+3. **Tela preta = vídeo maior que o decodificador da TV.** O RTSP conecta (`DESCRIBE/SETUP/PLAY
+   200 OK`), mas o main (3072×2048) passa do decodificador H.264 da TV
+   (`Failed to create video/avc decoder`). A Philips Google TV TA6 LT (chip MediaTek mt5867)
+   decodifica H.264 só até **1920×1088**, que é o comum em TVs. **Solução:** ao adicionar, o nevtv
+   lê os perfis (`GetProfiles`) e escolhe o **maior H.264 que o decodificador daquela TV aceita**
+   (`MediaCodecList` → `isSizeSupported`). Cada TV escolhe o seu: numa TV 4K com decodificador
+   maior, ela pega o main; nesta, pega o sub (001, 800×448).
+
+**Resolução da câmera não dá para ajustar:** `GetVideoEncoderConfigurationOptions` oferece
+**uma só** resolução por perfil (000: só 3072×2048; 001: só 800×448). O
+`SetVideoEncoderConfiguration` muda FPS/bitrate, mas não a resolução. Então não existe um
+"1920×1080" para pedir a esta câmera; na TV ela sai pelo sub. Câmeras que oferecem várias
+resoluções poderiam ter o sub ajustado para 1080p, mas isso muda a câmera para todos (app
+iCSee, este proxy), então fica como escolha manual, não automática.
+
+Como a câmera aparece em dois IPs (.41 e .42, mesmo MAC), a busca da TV mostra as duas: é o mesmo
+aparelho, basta adicionar uma.
+
 ### Funções expostas na interface
 - Ver ao vivo (Nítido/Fluido), Foto, Gravar (local, `-c copy`), Ouvir (microfone),
   Imagem (brilho/contraste/saturação/nitidez + WDR + Dia/Noite), PTZ (se houver motor).
