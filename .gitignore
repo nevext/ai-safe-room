@@ -9,3 +9,6 @@ node_modules/
 # SO
 .DS_Store
 Thumbs.db
+# modelo de IA (baixado na 1ª vez) e a câmera conectada por último (pode ter senha)
+server/models/
+server/state.json

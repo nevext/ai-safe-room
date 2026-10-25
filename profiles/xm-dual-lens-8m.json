@@ -11,7 +11,7 @@
   "onvifPath": "/onvif/device_service",
   "credentials": [["admin", ""], ["admin", "admin"], ["admin", "123456"], ["admin", "tlJwpbo6"]],
   "streams": {
-    "main": { "profileName": "mainStream", "rtspStream": 0, "size": [3072, 2048] },
+    "main": { "profileName": "mainStream", "rtspStream": 0, "size": [2304, 2592], "onvifSays": [3072, 2048] },
     "sub": { "profileName": "subStream", "rtspStream": 1, "size": [800, 448] },
     "rtspTemplate": "rtsp://{host}:{rtspPort}/user={user}_password={xmHash}_channel=0_stream={stream}&onvif=0.sdp?real_stream",
     "prefer": "onvif-GetStreamUri"

@@ -12,6 +12,10 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import dgram from 'node:dgram';
+import os from 'node:os';
+import { loadModel, analyzer } from './ai.mjs';
+import { createLive, keyframeAt } from './live.mjs';
 
 const PORT = 8787;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +23,57 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_FF = path.join(HERE, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
 const FFMPEG = fs.existsSync(LOCAL_FF) ? LOCAL_FF : 'ffmpeg';
 const HAS_FFMPEG = spawnSync(FFMPEG, ['-version']).status === 0;
+
+// Ao vivo com o menor atraso: sem o buffer de entrada do ffmpeg e sem esperar segundos analisando o
+// stream antes de começar (o padrão junta ~5 s).
+const LIVE_IN = ['-fflags', 'nobuffer', '-flags', 'low_delay', '-probesize', '500000', '-analyzeduration', '500000', '-rtsp_transport', 'tcp'];
+
+// H.264 para as telas: na placa de vídeo se der (NVIDIA, Intel, AMD), senão no processador.
+// Cada encoder testado com um quadro de mentira; o primeiro que funcionar fica.
+const H264 = (() => {
+  if (!HAS_FFMPEG) return null;
+  const tries = [
+    ['h264_nvenc', '-preset', 'p1', '-tune', 'ull', '-zerolatency', '1', '-rc', 'cbr'],
+    ['h264_qsv', '-preset', 'veryfast', '-low_power', '1'],
+    ['h264_amf', '-usage', 'ultralowlatency', '-quality', 'speed'],
+    ['libx264', '-preset', 'ultrafast', '-tune', 'zerolatency'],
+  ];
+  for (const [name, ...opts] of tries) {
+    const r = spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=black:s=640x360', '-frames:v', '1',
+      '-c:v', name, ...opts, '-f', 'null', '-'], { timeout: 15000 });
+    if (r.status === 0) return { name, opts };
+  }
+  return null;
+})();
+
+// Manda só o quadro JPEG mais novo: se a tela não deu conta do anterior, os do meio são pulados.
+// Sem isso os quadros fazem fila e o atraso só cresce (medido: 6 s em 25 s numa tela a 8 fps).
+function sendLatestJpeg(source, res) {
+  let buf = Buffer.alloc(0), latest = null, busy = false;
+  const send = () => {
+    if (busy || !latest || res.destroyed) return;
+    const frame = latest;
+    latest = null;
+    busy = true;
+    res.write(`--ffmpeg\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
+    res.write(frame);
+    res.write('\r\n', () => { busy = false; send(); });
+  };
+  source.on('data', d => {
+    buf = buf.length ? Buffer.concat([buf, d]) : d;
+    for (;;) {
+      const head = buf.indexOf('\r\n\r\n');
+      if (head < 0) break;
+      const m = /content-length:\s*(\d+)/i.exec(buf.subarray(0, head).toString('latin1'));
+      if (!m) { buf = buf.subarray(head + 4); continue; }
+      const end = head + 4 + +m[1];
+      if (buf.length < end) break;
+      latest = Buffer.from(buf.subarray(head + 4, end));
+      buf = buf.subarray(end);
+    }
+    send();
+  });
+}
 const REC_DIR = path.join(process.cwd(), 'server', 'gravacoes');
 
 // Perfil da câmera (profiles/*.json): a fonte única do que sabemos dela, lida também pelo app nevhome.
@@ -77,6 +132,7 @@ async function connect(addr, user, pass) {
         firmware: tag(info.text, 'FirmwareVersion'), serial: tag(info.text, 'SerialNumber'),
       };
       await loadProfiles();
+      saveState();
       const opt = await maybeOptimize();   // otimiza na conexão; no-op se já estiver bom
       return { ok: true, authUser: u, blankPass: p === '', optimized: opt.applied || false, ...publicState() };
     }
@@ -256,11 +312,12 @@ function startAudio(res) {
 
 // ---------- Stream MJPEG (só com ffmpeg) ----------
 function startStream(res, which) {
+  if (live) return mjpegFromLive(res, 'whole', 1920, 1080);   // sem abrir outra conexão com a câmera
   const prof = which === 'main' ? mainProfile() : subProfile();
   const rtsp = prof?.rtsp; if (!rtsp) return json(res, 409, { error: 'sem RTSP' });
   res.writeHead(200, { 'content-type': 'multipart/x-mixed-replace; boundary=ffmpeg', 'cache-control': 'no-cache', 'connection': 'close', ...cors });
-  const ff = spawn(FFMPEG, ['-rtsp_transport', 'tcp', '-i', rtsp, '-f', 'mpjpeg', '-q:v', '5', '-boundary_tag', 'ffmpeg', '-']);
-  ff.stdout.pipe(res); ff.stderr.on('data', () => {});
+  const ff = spawn(FFMPEG, [...LIVE_IN, '-i', rtsp, '-an', '-f', 'mpjpeg', '-q:v', '5', '-boundary_tag', 'ffmpeg', '-']);
+  sendLatestJpeg(ff.stdout, res); ff.stderr.on('data', () => {});
   const kill = () => { try { ff.kill('SIGKILL'); } catch {} };
   res.on('close', kill); ff.on('error', () => { kill(); try { res.end(); } catch {} });
 }
@@ -277,6 +334,292 @@ function toggleRecord(on) {
   }
   if (!on && rec) { try { rec.stdin.write('q'); } catch {} try { rec.kill('SIGINT'); } catch {} const f = rec.file; rec = null; return { ok: true, file: f }; }
   return { ok: false, error: HAS_FFMPEG ? 'nada a fazer' : 'gravação precisa de ffmpeg' };
+}
+
+// ---------- Telas (TV nevtv, celular, navegador): a câmera com tudo o que o camera-ai sabe fazer ----------
+// Toda tela pergunta /api/screen e monta o que vier: controles novos aqui aparecem em todas as TVs
+// sem atualizar o nevtv. A IA roda uma vez só, aqui, e /api/screen/events manda o resultado para todas.
+// Sem o camera-ai, o nevtv fala direto com a câmera e fica com o que consegue sozinho (sem IA).
+
+const SCREEN_VERSION = 1;
+const MODEL_DIR = path.join(HERE, 'models', 'ssdlite_mobilenet_v2');
+const ai = { status: 'loading', model: null, stop: null, last: null, listeners: new Set(), idle: null };
+
+// A conexão única com a câmera (server/live.mjs): telas e IA saem todas dela.
+const live = HAS_FFMPEG && H264 ? createLive({
+  ffmpeg: FFMPEG, inputArgs: LIVE_IN, rtsp: () => mainProfile()?.rtsp, encoder: H264,
+  views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'],
+}) : null;
+
+// O MJPEG (navegador, TVs sem H.264) também sai da conexão única: o ffmpeg lê o H.264 da vista aqui
+// mesmo e manda JPEG a JPEG, sempre o mais novo.
+function mjpegFromLive(res, view, width, height) {
+  res.writeHead(200, { 'content-type': 'multipart/x-mixed-replace; boundary=ffmpeg', 'cache-control': 'no-cache', 'connection': 'close', ...cors });
+  const src = `http://127.0.0.1:${PORT}/api/screen/video?format=ts&view=${live.views.includes(view) ? view : 'whole'}`;
+  const ff = spawn(FFMPEG, ['-loglevel', 'error', '-fflags', 'nobuffer', '-flags', 'low_delay', '-probesize', '200000',
+    '-analyzeduration', '200000', '-f', 'mpegts', '-i', src,
+    '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2`, '-r', '15',
+    '-f', 'mpjpeg', '-q:v', '5', '-boundary_tag', 'ffmpeg', '-']);
+  sendLatestJpeg(ff.stdout, res); ff.stderr.on('data', () => {});
+  const kill = () => { try { ff.kill('SIGKILL'); } catch {} };
+  res.on('close', kill); ff.on('close', () => { try { res.end(); } catch {} }); ff.on('error', () => { kill(); try { res.end(); } catch {} });
+}
+
+async function loadAi() {
+  try {
+    ai.model = await loadModel(MODEL_DIR);
+    ai.status = ai.model ? 'on' : 'unavailable';
+  } catch (e) {
+    ai.status = 'unavailable';
+    console.log('IA indisponível:', e.message);
+  }
+  console.log('IA: ' + (ai.status === 'on' ? 'ligada' : 'sem IA (rode npm install)'));
+  if (ai.listeners.size) startAi();
+}
+
+// Analisa só enquanto alguma tela está assistindo.
+function startAi() {
+  clearTimeout(ai.idle);
+  if (ai.stop || !ai.model || !live) return;
+  ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => { ai.last = r; broadcast({ type: 'detections', ...r }); } }));
+}
+function stopAiSoon() {
+  clearTimeout(ai.idle);
+  ai.idle = setTimeout(() => { if (!ai.listeners.size && ai.stop) { ai.stop(); ai.stop = null; } }, 10000);
+}
+function broadcast(event) {
+  const line = JSON.stringify(event) + '\n';
+  for (const res of ai.listeners) res.write(line);
+}
+
+const L = (pt, en) => ({ pt, en });
+const IMAGING_OPTIONS = {};
+async function imagingOptions() {
+  if (IMAGING_OPTIONS.loaded) return IMAGING_OPTIONS;
+  const r = await soap(null, `<timg:GetOptions xmlns:timg="http://www.onvif.org/ver20/imaging/wsdl"><timg:VideoSourceToken>${cam.videoSource}</timg:VideoSourceToken></timg:GetOptions>`);
+  for (const name of ['Brightness', 'Contrast', 'ColorSaturation', 'Sharpness']) {
+    const m = r.text.match(new RegExp(`:${name}>\\s*<[^>]*Min>([-\\d.]+)<[^>]*>\\s*<[^>]*Max>([-\\d.]+)<`));
+    IMAGING_OPTIONS[name] = m ? [+m[1], +m[2]] : [0, 100];
+  }
+  IMAGING_OPTIONS.loaded = r.ok;
+  return IMAGING_OPTIONS;
+}
+
+// O que a tela mostra no painel, na ordem. type: choice (options), level (min/max/step), toggle.
+async function screenControls() {
+  if (!cam.addr) return [];
+  const s = await getImaging();
+  const o = await imagingOptions();
+  const level = (id, name, label, value) => {
+    const [min, max] = o[name] || [0, 100];
+    return { id, type: 'level', label, min, max, step: (max - min) / 10, value: Math.round(value) };
+  };
+  return [
+    { id: 'ircut', type: 'choice', label: L('Dia / noite', 'Day / night'), value: dayNight.mode === 'SCHEDULE' ? 'SCHEDULE' : s.ircut,
+      options: [
+        { value: 'SCHEDULE', label: L(`Por horário (${hour(dayNight.night)}–${hour(dayNight.day)})`, `By the clock (${dayNight.night}–${dayNight.day})`) },
+        { value: 'AUTO', label: L('Automático', 'Automatic') }, { value: 'ON', label: L('Dia', 'Day') }, { value: 'OFF', label: L('Noite', 'Night') }] },
+    level('brightness', 'Brightness', L('Brilho', 'Brightness'), s.brightness),
+    level('contrast', 'Contrast', L('Contraste', 'Contrast'), s.contrast),
+    level('saturation', 'ColorSaturation', L('Cor', 'Color'), s.saturation),
+    level('sharpness', 'Sharpness', L('Nitidez', 'Sharpness'), s.sharpness),
+    ...(s.wdr ? [{ id: 'wdr', type: 'toggle', label: L('Contraluz (WDR)', 'Backlight (WDR)'), value: s.wdr === 'ON' }] : []),
+  ];
+}
+
+async function screenControl(id, value) {
+  const set = {
+    ircut: async () => {
+      dayNight = { ...dayNight, mode: String(value) === 'SCHEDULE' ? 'SCHEDULE' : 'MANUAL' };
+      saveState();
+      if (dayNight.mode === 'SCHEDULE') { await applySchedule(); return { ok: true }; }
+      return setImaging({ ircut: String(value) });
+    },
+    wdr: () => setImaging({ wdr: value ? 'ON' : 'OFF' }),
+    brightness: () => setImaging({ brightness: +value }),
+    contrast: () => setImaging({ contrast: +value }),
+    saturation: () => setImaging({ saturation: +value }),
+    sharpness: () => setImaging({ sharpness: +value }),
+  }[id];
+  if (!set) return { ok: false, error: 'controle desconhecido: ' + id };
+  const r = await set();
+  return { ok: r.ok, controls: await screenControls() };
+}
+
+async function screenInfo() {
+  return {
+    version: SCREEN_VERSION, hub: 'camera-ai',
+    camera: { connected: !!cam.addr, name: PROFILE.name || cam.info.model || 'Câmera', model: cam.info.model || null,
+      serial: cam.info.serial || null, hosts: cam.addr ? [cam.addr] : [] },
+    lenses: PROFILE.lenses || null,
+    video: HAS_FFMPEG ? { mjpeg: '/api/screen/video', formats: live ? ['ts', 'mjpeg'] : H264 ? ['h264', 'mjpeg'] : ['mjpeg'],
+      views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'] } : null,
+    ai: { status: ai.status, events: '/api/screen/events' },
+    audio: live && PROFILE.audio?.microphone !== false ? { pcm: '/api/screen/audio', rate: 8000, channels: 1 } : null,
+    controls: await screenControls().catch(() => []),
+  };
+}
+
+// Vídeo para a tela já no tamanho dela: o PC decodifica o main (2304×2592, grande demais para o
+// decodificador da maioria das TVs), recorta a lente pedida e manda MJPEG.
+// format=h264: H.264 de baixo atraso (o decodificador da TV mostra, ~3 Mbps). mjpeg: JPEG a JPEG,
+// só o mais novo (para navegador e TVs cujo decodificador não aceite o H.264).
+function screenVideo(res, view, width, height, format) {
+  const main = mainProfile();
+  if (!main?.rtsp) return json(res, 409, { error: 'sem câmera' });
+  if (live) {
+    if (format !== 'ts') return mjpegFromLive(res, view, width, height);
+    res.writeHead(200, { 'content-type': 'video/mp2t', 'cache-control': 'no-cache', 'connection': 'close', ...cors });
+    return live.watch(live.views.includes(view) ? view : 'whole', res);
+  }
+  const crop = view === 'top' ? 'crop=iw:ih/2:0:0,' : view === 'bottom' ? 'crop=iw:ih/2:0:ih/2,' : '';
+  const vf = `${crop}scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2`;
+  const h264 = format === 'h264' && H264;
+  res.writeHead(200, { 'content-type': h264 ? 'video/h264' : 'multipart/x-mixed-replace; boundary=ffmpeg',
+    'cache-control': 'no-cache', 'connection': 'close', ...cors });
+  const out = h264
+    ? ['-c:v', H264.name, ...H264.opts, '-profile:v', 'main', '-bf', '0', '-g', '30', '-b:v', '3M', '-maxrate', '3M', '-bufsize', '500k',
+       '-bsf:v', 'dump_extra', '-f', 'h264', '-']
+    : ['-r', '15', '-f', 'mpjpeg', '-q:v', '5', '-boundary_tag', 'ffmpeg', '-'];
+  const ff = spawn(FFMPEG, ['-loglevel', 'error', ...LIVE_IN, '-i', main.rtsp, '-an', '-vf', vf, ...out]);
+  let errors = '';
+  ff.stderr.on('data', d => { errors = (errors + d).slice(-600); });
+  if (h264) {
+    // Se a tela ficar para trás (Wi-Fi engasgou), pula até o próximo quadro inteiro (SPS antes do
+    // IDR, a cada 30 quadros) em vez de acumular atraso: H.264 não deixa pular um quadro solto.
+    let skipping = false;
+    ff.stdout.on('data', d => {
+      if (res.writableLength > 8e6) { console.log('tela parada: fechando o vídeo'); return res.destroy(); }
+      if (!skipping && res.writableLength > 600000) { skipping = true; console.log('tela atrasada: pulando para o ao vivo'); }
+      if (skipping) {
+        if (res.writableLength > 100000) return;
+        const at = keyframeAt(d);
+        if (at < 0) return;
+        d = d.subarray(at);
+        skipping = false;
+      }
+      res.write(d);
+    });
+  } else {
+    sendLatestJpeg(ff.stdout, res);
+  }
+  const kill = () => { try { ff.kill('SIGKILL'); } catch {} };
+  res.on('close', kill);
+  ff.on('close', code => {
+    if (code) console.log(`vídeo da tela (${view} ${width}x${height}) parou: ${code} ${errors.trim()}`);
+    try { res.end(); } catch {}
+  });
+  ff.on('error', () => { kill(); try { res.end(); } catch {} });
+}
+
+function screenEvents(req, res) {
+  res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache', 'connection': 'close', ...cors });
+  res.write(JSON.stringify({ type: 'hello', ai: ai.status }) + '\n');
+  if (ai.last) res.write(JSON.stringify({ type: 'detections', ...ai.last }) + '\n');
+  ai.listeners.add(res);
+  startAi();
+  // A cada 2 s: a TV percebe se caiu, e mostra como o vídeo está chegando da câmera
+  const ping = setInterval(() => res.write(JSON.stringify({ type: 'ping', ai: ai.status, video: live ? live.stats() : null }) + '\n'), 2000);
+  res.on('close', () => { clearInterval(ping); ai.listeners.delete(res); if (!ai.listeners.size) stopAiSoon(); });
+}
+
+// A TV acha o camera-ai na rede: manda "camera-ai?" em broadcast UDP na porta 8788 e recebe o endereço.
+const DISCOVERY_PORT = 8788;
+function startDiscovery() {
+  const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  sock.on('message', (msg, from) => {
+    if (msg.toString().trim() !== 'camera-ai?') return;
+    const reply = JSON.stringify({ hub: 'camera-ai', version: SCREEN_VERSION, port: PORT,
+      serial: cam.info.serial || null, hosts: cam.addr ? [cam.addr] : [] });
+    sock.send(reply, from.port, from.address);
+  });
+  sock.on('error', e => console.log('descoberta UDP:', e.message));
+  sock.bind(DISCOVERY_PORT);
+}
+
+// Conecta sozinho na câmera ao ligar: CAMERA=ip, ou a última que conectou (server/state.json), ou o
+// endereço do perfil. Assim as telas acham a câmera pronta, sem abrir a interface no navegador antes.
+const STATE_FILE = path.join(HERE, 'state.json');
+function saveState() {
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight })); } catch {}
+}
+
+// ---------- Dia/noite por horário ----------
+// No automático a câmera decide pela luz e fica trocando no fim de tarde (e a luz branca acende e
+// apaga junto). Por horário: noite das 19h às 6h, dia no resto. Escolher Automático/Dia/Noite à mão
+// desliga o horário. Só roda com o camera-ai ligado; a câmera guarda o último modo aplicado.
+let dayNight = (() => {
+  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')).dayNight || null; } catch { return null; }
+})() || { mode: 'SCHEDULE', night: '19:00', day: '06:00' };
+
+const hour = (hhmm) => { const [h, m] = String(hhmm).split(':').map(Number); return h + 'h' + (m ? String(m).padStart(2, '0') : ''); };
+const minutes = (hhmm) => { const [h, m] = String(hhmm).split(':').map(Number); return h * 60 + (m || 0); };
+function scheduledIrCut(now = new Date()) {
+  const t = now.getHours() * 60 + now.getMinutes(), night = minutes(dayNight.night), day = minutes(dayNight.day);
+  const isNight = night > day ? (t >= night || t < day) : (t >= night && t < day);
+  return isNight ? 'OFF' : 'ON';   // ONVIF: IrCutFilter OFF = noite (infravermelho), ON = dia
+}
+async function applySchedule() {
+  if (dayNight.mode !== 'SCHEDULE' || !cam.addr) return;
+  const want = scheduledIrCut();
+  try {
+    const now = (await getImaging()).ircut;
+    if (now !== want) {
+      await setImaging({ ircut: want });
+      console.log(`Dia/noite: ${want === 'OFF' ? 'noite' : 'dia'} (horário ${dayNight.night}–${dayNight.day})`);
+    }
+  } catch (e) { console.log('Dia/noite:', e.message); }
+}
+setInterval(applySchedule, 60000);
+// WS-Discovery (ONVIF): a primeira câmera que responder na rede. Um socket por rede do PC: sem
+// isso o Windows pode mandar a busca só pela VPN (Tailscale, etc.) e nenhuma câmera responde.
+function findCamera(timeout = 3000) {
+  return new Promise(ok => {
+    const probe = `<?xml version="1.0" encoding="UTF-8"?><e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl"><e:Header><w:MessageID>uuid:${crypto.randomUUID()}</w:MessageID><w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To><w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header><e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>`;
+    const socks = [];
+    let finished = false;
+    const done = (host) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      for (const s of socks) { try { s.close(); } catch {} }
+      ok(host);
+    };
+    const timer = setTimeout(() => done(null), timeout);
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const a of list || []) {
+        if (a.family !== 'IPv4' || a.internal) continue;
+        const sock = dgram.createSocket('udp4');
+        socks.push(sock);
+        sock.on('message', m => { const x = m.toString().match(/XAddrs>\s*https?:\/\/([^:/\s<]+)/); if (x) done(x[1]); });
+        sock.on('error', () => {});
+        sock.bind(0, a.address, () => sock.send(probe, 3702, '239.255.255.250', () => {}));
+      }
+    }
+    if (!socks.length) done(null);
+  });
+}
+
+// Não conseguiu (câmera reiniciando, Wi-Fi dela oscilando): tenta de novo a cada 15 s, primeiro o
+// endereço salvo e depois quem responder na rede (o IP dela pode ter mudado).
+async function autoConnect(tries = 0) {
+  if (cam.addr) return;
+  let saved = {};
+  try { saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch {}
+  const addr = process.env.CAMERA || (tries % 2 === 0 && saved.addr) || await findCamera() || saved.addr;
+  let ok = false;
+  if (addr) {
+    try {
+      const r = await connect(addr, saved.user, saved.pass);
+      ok = r.ok;
+      console.log(ok ? `Câmera: ${addr} conectada` : `Câmera: ${addr} não respondeu (${r.error})`);
+    } catch (e) {
+      console.log(`Câmera: ${addr} não respondeu (${e.message})`);
+    }
+  } else if (tries === 0) {
+    console.log('Câmera: nenhuma achada na rede ainda; tentando de novo.');
+  }
+  if (!ok) { cam.addr = null; setTimeout(() => autoConnect(tries + 1), 15000); }
 }
 
 // ---------- servidor ----------
@@ -296,8 +639,21 @@ const server = http.createServer(async (req, res) => {
       case '/api/imaging':
         if (req.method === 'GET') return json(res, 200, await getImaging());
         { const b = await readBody(req); return json(res, 200, await setImaging(b)); }
-      case '/api/daynight': { const b = await readBody(req); return json(res, 200, await setImaging({ ircut: b.mode })); }
+      case '/api/daynight': { const b = await readBody(req); return json(res, 200, await screenControl('ircut', b.mode)); }
       case '/api/audio':   return startAudio(res);
+      case '/api/screen':  return json(res, 200, await screenInfo());
+      case '/api/screen/control': { const b = await readBody(req); return json(res, 200, await screenControl(b.id, b.value)); }
+      case '/api/screen/events': return screenEvents(req, res);
+      case '/api/screen/audio':
+        if (!live) return json(res, 501, { error: 'sem a conexão única' });
+        res.writeHead(200, { 'content-type': 'audio/L16;rate=8000;channels=1', 'cache-control': 'no-cache', 'connection': 'close', ...cors });
+        return live.listen(res);
+      case '/api/screen/video': {
+        if (!HAS_FFMPEG) return json(res, 501, { error: 'sem ffmpeg' });
+        const n = (k, d, max) => Math.max(160, Math.min(max, parseInt(u.searchParams.get(k), 10) || d));
+        return screenVideo(res, u.searchParams.get('view') || 'whole', n('width', 1920, 3840), n('height', 1080, 2160),
+          u.searchParams.get('format') || 'mjpeg');
+      }
       default: return serveStatic(u.pathname, res);   // UI na mesma porta
     }
   } catch (e) { return json(res, 500, { error: String(e.message || e) }); }
@@ -321,5 +677,9 @@ function serveStatic(pathname, res) {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`cam-control no PC:     http://127.0.0.1:${PORT}`);
   console.log(`cam-control no celular: http://192.168.0.33:${PORT}   (mesma rede Wi-Fi)`);
-  console.log(`ffmpeg: ${HAS_FFMPEG ? 'sim' : 'não'}`);
+  console.log(`ffmpeg: ${HAS_FFMPEG ? 'sim' : 'não'} · H.264 para as telas: ${H264 ? H264.name : 'não'}`);
+  startDiscovery();
+  autoConnect();
+  loadAi();
+  setTimeout(applySchedule, 8000);   // depois de conectar na câmera
 });

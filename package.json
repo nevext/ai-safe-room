@@ -1,0 +1,13 @@
+{
+  "name": "camera-ai",
+  "private": true,
+  "description": "Controle local da câmera XM/iCSee: ONVIF/RTSP, IA (pessoa/animal) e a API das telas (TV nevtv, celular).",
+  "scripts": {
+    "start": "node server/proxy.mjs"
+  },
+  "dependencies": {
+    "@tensorflow-models/coco-ssd": "2.2.3",
+    "@tensorflow/tfjs": "4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "4.22.0"
+  }
+}

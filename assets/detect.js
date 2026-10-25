@@ -90,10 +90,50 @@
     raf = setTimeout(loop, 220); // ~4-5 análises por segundo
   }
 
+  // A IA do camera-ai (server/ai.mjs): a mesma que a TV e o celular recebem. Só se ela não estiver
+  // ligada é que o navegador roda a própria.
+  async function serverAi(){
+    try { const r = await fetch('/api/screen'); const j = await r.json(); return !!(j.ai && j.ai.status === 'on'); }
+    catch { return false; }
+  }
+  async function followServer(){
+    try {
+      const res = await fetch('/api/screen/events');
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      let buf = '';
+      while (enabled){
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0){
+          const line = buf.slice(0, i); buf = buf.slice(i + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line);
+          if (ev.type !== 'detections' || !live.naturalWidth) continue;
+          const nw = live.naturalWidth, nh = live.naturalHeight;
+          draw(ev.items.map(it => ({ class: it.class, score: it.score,
+            bbox: [it.box[0] * nw, it.box[1] * nh, it.box[2] * nw, it.box[3] * nh] })), fit());
+        }
+      }
+      reader.cancel().catch(() => {});
+    } catch {}
+    if (enabled) raf = setTimeout(followServer, 3000);   // caiu: tenta de novo
+  }
+
   async function enable(){
     if (loading) return;
     loading = true; stateEl.textContent = 'carregando…';
     try {
+      if (await serverAi()){
+        enabled = true;
+        stateEl.textContent = 'ligado (camera-ai)';
+        hudDetect.hidden = false;
+        canvas.style.display = 'block';
+        toastFn('Detecção ligada pelo camera-ai: pessoa (verde), animal (laranja).');
+        followServer();
+        return;
+      }
       await ensureModel();
       enabled = true;
       stateEl.textContent = 'ligado';

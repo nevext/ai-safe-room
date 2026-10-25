@@ -16,9 +16,13 @@ A câmera (modelo `XM232_X6S-WEQ-H_8M`, 2 lentes de 4MP = "8M") só tem o app iC
   (as duas lentes vêm empilhadas num frame só; a interface recorta cada uma).
 - Foto, gravação local, ouvir o microfone, ajustes de imagem (brilho/contraste/saturação/
   nitidez, WDR, dia/noite) — tudo via ONVIF.
-- **Detecção por IA no próprio navegador** (TensorFlow.js + COCO-SSD): quadrados
-  **verde = pessoa**, **laranja = animal**, **vermelho = incerto**. Nenhuma imagem sai do
-  aparelho.
+- **Detecção por IA no próprio camera-ai** (TensorFlow.js + COCO-SSD, no Node): quadrados
+  **verde = pessoa**, **laranja = animal**, **vermelho = incerto**. Roda uma vez, no PC, e vai
+  para **todas as telas** (navegador, celular, TVs com o nevtv). Nenhuma imagem sai do PC.
+- **A câmera em qualquer TV da casa** pelo [nevtv](https://github.com/nevext/nevtv): a TV acha o
+  camera-ai sozinha e mostra o que ele oferece (vídeo da lente nítido, IA, controles). Função
+  nova aqui aparece nas TVs sem atualizar o nevtv. Com o PC desligado, a TV fala direto com a
+  câmera e fica com o que consegue sozinha (imagem, dia/noite, aviso de movimento; sem IA).
 - Otimização automática de FPS/bitrate (a câmera vinha travada em 12fps).
 
 Interface no estilo do [nevext.com.br](https://nevext.com.br) (fonte Geist, azul #2563eb,
@@ -27,13 +31,32 @@ claro/escuro automático).
 ## Como funciona (arquitetura)
 
 ```
-  Câmera XM ──ONVIF(8899)/RTSP(554)──►  server/proxy.mjs (Node, sem dependências)
-                                              │  traduz p/ HTTP simples + MJPEG (via ffmpeg)
-                                              ▼
-                         Interface web (index.html + assets/)  ──►  navegador (PC/celular)
-                                              │
-                                   IA de detecção roda aqui, no navegador
+  Câmera XM ──ONVIF(8899)/RTSP(554)──►  server/proxy.mjs  (o "cérebro" da câmera, no PC)
+                                         │  IA (server/ai.mjs), MJPEG via ffmpeg, controles ONVIF
+                                         │
+           ┌─────────────────────────────┼──────────────────────────────┐
+           ▼                             ▼                              ▼
+   navegador (PC/celular)       TVs com o nevtv                  app do celular
+   index.html + assets/         /api/screen (porta 8787)         /api/screen
+                                acha o PC por UDP 8788
 ```
+
+**API das telas** (`/api/screen…`): é o contrato com o nevtv e qualquer outra tela.
+- `GET /api/screen`: a câmera (nome, modelo, série, IPs), as lentes, o vídeo, o estado da IA e os
+  **controles** (`choice`, `level`, `toggle`, com rótulo `pt`/`en`). A tela monta o painel com o que
+  vier; controle novo aqui = controle novo em todas as TVs.
+- `POST /api/screen/control` `{id, value}`: muda um controle; devolve todos de novo.
+- `GET /api/screen/events`: NDJSON, uma linha por análise (`detections`: caixas em fração do
+  quadro inteiro, 0–1) e um `ping` a cada 5 s. A IA só roda enquanto alguma tela escuta.
+- `GET /api/screen/video?view=whole|top|bottom&width=&height=&format=h264|mjpeg`: o vídeo já recortado
+  na lente e no tamanho da tela (o PC decodifica o vídeo grande, que as TVs não aguentam).
+  `h264`: H.264 de baixo atraso na placa de vídeo (NVENC/QSV/AMF, ou x264 no processador), ~3 Mbps,
+  **~1 s de atraso**; se a tela ficar para trás, a conexão fecha e ela reconecta no ao vivo. `mjpeg`:
+  JPEG a JPEG, sempre o mais novo (os do meio são pulados), para navegador e TVs sem H.264.
+- Descoberta: a TV manda `camera-ai?` em broadcast UDP na **porta 8788** e recebe
+  `{hub, port, serial, hosts}`.
+- Ao ligar, o proxy conecta sozinho: `CAMERA=ip`, ou a última câmera (`server/state.json`), ou a
+  primeira que responder na rede (WS-Discovery).
 
 - **Navegador não toca RTSP.** O proxy usa o **ffmpeg** para converter RTSP → MJPEG e serve
   tudo (UI + API) na **porta 8787**.
@@ -41,7 +64,8 @@ claro/escuro automático).
 
 ### A câmera (dados confirmados)
 - IP na rede: `192.168.0.41` (login ONVIF `admin`, senha vazia — padrão de fábrica).
-- 1 fonte de vídeo 3072×2048 com as **2 lentes empilhadas** (cada uma ~3072×1024).
+- 1 fonte de vídeo com as **2 lentes empilhadas**: o ONVIF diz 3072×2048, mas o RTSP entrega
+  **2304×2592** (cada lente 2304×1296, 16:9).
 - Portas abertas: RTSP 554, ONVIF 8899, DVRIP 34567, HTTP 80.
 - Detalhes técnicos e como tudo foi descoberto: [`docs/DESCOBERTA.md`](docs/DESCOBERTA.md).
 
@@ -51,18 +75,34 @@ Pré-requisitos: **Node 18+** e o **ffmpeg** (baixe uma vez):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File server/get-ffmpeg.ps1   # baixa ffmpeg p/ server/bin
+npm install                                                       # a IA (TensorFlow.js, ~300 MB)
 node server/proxy.mjs                                             # sobe tudo na porta 8787
 ```
+
+**Ligar junto com o Windows** (sem janela; se cair, volta sozinho em 5 s):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server/autostart.ps1           # instala e já liga
+powershell -ExecutionPolicy Bypass -File server/autostart.ps1 -Remove   # tira e desliga
+```
+
+Cria a tarefa agendada `camera-ai` (ao entrar no Windows), que roda `server/hidden.vbs` →
+`server/run.ps1` → `node server/proxy.mjs`. Log da sessão em `server/camera-ai.now.log`.
+
+Sem o `npm install` tudo funciona, só sem IA. O modelo baixa na 1ª vez para `server/models/`
+e depois roda sem internet.
 
 Abrir:
 - **PC:** http://127.0.0.1:8787
 - **Celular (mesma Wi-Fi):** http://192.168.0.33:8787
   - Se não abrir, liberar a porta no Firewall (uma vez, PowerShell admin):
     `New-NetFirewallRule -DisplayName "camera-ai" -Direction Inbound -Protocol TCP -LocalPort 8787 -Action Allow -Profile Private`
+  - As TVs também precisam da porta **UDP 8788** (para achar o PC); quando o Windows perguntar
+    ao subir o Node, permitir. Se a rede de casa estiver como *Pública* no Windows, a regra
+    precisa valer para *Public* também.
 
 Login: a interface tenta `admin`/senha vazia e padrões XM sozinha. Trocou a senha no app?
-Ponha no ⚙. Gravações caem em `server/gravacoes/`. A IA baixa o modelo na 1ª vez (precisa
-de internet uma vez; depois roda offline).
+Ponha no ⚙. Gravações caem em `server/gravacoes/`.
 
 ## Estrutura
 
@@ -70,8 +110,12 @@ de internet uma vez; depois roda offline).
 index.html            interface (player)
 assets/app.css        estilo (tema nevext, Geist)
 assets/app.js         lógica da UI (lentes, qualidade, PTZ, imagem, áudio, foto, gravar)
-assets/detect.js      detecção por IA (COCO-SSD) no navegador
-server/proxy.mjs      proxy ONVIF/RTSP + servidor web (porta 8787)
+assets/detect.js      desenha a detecção: usa a IA do camera-ai (ou roda a própria, se ela faltar)
+server/proxy.mjs      proxy ONVIF/RTSP + servidor web + API das telas (porta 8787, UDP 8788)
+server/ai.mjs         a IA (COCO-SSD no Node): analisa o vídeo e manda para as telas
+server/live.mjs       a conexão única com a câmera: vistas H.264 para as telas e quadros para a IA
+package.json          dependências da IA (npm install)
+profiles/             o que sabemos de cada câmera (lido pelo proxy e pelos apps)
 server/get-ffmpeg.ps1 baixa o ffmpeg estático p/ server/bin
 docs/DESCOBERTA.md    como a câmera foi investigada e tudo que achamos
 FEATURES.md           o que está pronto e o que falta

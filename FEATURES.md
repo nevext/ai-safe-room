@@ -13,7 +13,10 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
 - [x] Ouvir o microfone (RTSP→MP3).
 - [x] Ajustes de imagem: brilho, contraste, saturação, nitidez, WDR, **Dia/Noite** (IrCut).
 - [x] Otimização automática de FPS/bitrate na conexão (12→20/25 fps).
-- [x] **Detecção por IA no navegador** (pessoa=verde, animal=laranja, incerto=vermelho).
+- [x] **Detecção por IA no camera-ai** (pessoa=verde, animal=laranja, incerto=vermelho): roda no
+      PC (`server/ai.mjs`) e vai para todas as telas; o navegador só desenha.
+- [x] **API das telas** (`/api/screen`): as TVs com o nevtv mostram a câmera com vídeo nítido, IA e
+      os controles que o camera-ai listar; sem o PC, seguem direto da câmera (sem IA).
 - [x] Interface estilo nevext (Geist, azul #2563eb), player com controles que somem,
       tela cheia e menu.
 - [x] Qualidade: automática / alta / fluido (menu ☰).

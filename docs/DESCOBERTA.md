@@ -61,7 +61,7 @@ por brecha conhecida da XM, não por telnet aberto.
 
 | Perfil | Resolução | FPS antes | FPS depois | Bitrate antes → depois |
 |--------|-----------|-----------|------------|------------------------|
-| mainStream (000) | 3072×2048 H264 | 12 | **20** | 1536 → **4096 kbps** |
+| mainStream (000) | 3072×2048 H264 (no ONVIF; o RTSP entrega 2304×2592) | 12 | **20** | 1536 → **4096 kbps** |
 | subStream (001)  | 800×448 H264   | 12 | **25** | 512 → **1024 kbps** |
 | snapStream (002) | 800×448 JPEG   | — | — | — |
 
@@ -121,8 +121,9 @@ Estilo **player Apple Home + marca nevext.com.br** (2026-10-20):
 Tudo em `index.html` + `assets/app.css`; lógica em `assets/app.js`.
 
 > **Câmera de DUAS LENTES** (corrigido 2026-10-20 após print do usuário): é um aparelho só
-> (1 MAC, 1 fonte ONVIF `V_SRC_000` 3072×2048), mas o firmware **junta as duas lentes num
-> frame único, empilhadas**: lente 1 em cima, lente 2 embaixo (cada uma ~3072×1024, 3:1).
+> (1 MAC, 1 fonte ONVIF `V_SRC_000`), mas o firmware **junta as duas lentes num
+> frame único, empilhadas**: lente 1 em cima, lente 2 embaixo. O ONVIF diz 3072×2048, mas o
+> RTSP entrega **2304×2592** (conferido com ffmpeg, 2026-10-24): cada lente é **2304×1296, 16:9**.
 > O "8M" = 2×4MP. Por isso parecia "dois vídeos cortados".
 >
 > **Solução na interface**: seletor **Câmera 1 / Câmera 2 / Ambas** (no lugar do antigo
@@ -151,7 +152,7 @@ TV que tenha o nevtv** (está no app, não na TV):
 2. **Login.** Esta câmera não tem senha (admin/vazio). O nevtv tenta primeiro **sem login** e só
    pergunta se a câmera recusar. O login, quando existe, fica guardado com a câmera (pede uma vez).
 3. **Tela preta = vídeo maior que o decodificador da TV.** O RTSP conecta (`DESCRIBE/SETUP/PLAY
-   200 OK`), mas o main (3072×2048) passa do decodificador H.264 da TV
+   200 OK`), mas o main (2304×2592 de verdade) passa do decodificador H.264 da TV
    (`Failed to create video/avc decoder`). A Philips Google TV TA6 LT (chip MediaTek mt5867)
    decodifica H.264 só até **1920×1088**, que é o comum em TVs. **Solução:** ao adicionar, o nevtv
    lê os perfis (`GetProfiles`) e escolhe o **maior H.264 que o decodificador daquela TV aceita**
@@ -167,6 +168,110 @@ iCSee, este proxy), então fica como escolha manual, não automática.
 
 Como a câmera aparece em dois IPs (.41 e .42, mesmo MAC), a busca da TV mostra as duas: é o mesmo
 aparelho, basta adicionar uma.
+
+**Controles na TV** (OK no vídeo abre o painel; ↑ ↓ escolhe, ← → muda):
+
+| Função do camera-ai | Na TV | Como |
+|---|---|---|
+| Câmera 1 / Câmera 2 / Ambas | Mostrar: metade de cima / de baixo / inteira | recorte local (TextureView), lembrado por câmera |
+| Ouvir | Som ligado/desligado | o áudio G711 já vem no RTSP |
+| Dia/Noite | Automático / Dia / Noite | `IrCutFilter` AUTO / ON / OFF |
+| Imagem | Brilho, Contraste, Cor, Nitidez, Contraluz (WDR) | `SetImagingSettings` com `ForcePersistence` (vale pro iCSee e pro proxy também) |
+
+Os limites vêm do `GetOptions` (nesta câmera: 0–100, e nitidez 0–15). O serviço de imagem é
+`/onvif/image_service`, fonte `V_SRC_000`. Ficaram de fora na TV: **PTZ** (não confirmado que tenha
+motor), **Foto/Gravar** (precisam de ffmpeg ou de guardar arquivo na TV), **otimização de FPS**
+(já persistida pelo proxy) e **detecção por IA**. No modo metade, o vídeo é o sub (800×448), então
+cada lente sai em 800×224 ampliada: a TV não decodifica o main.
+
+### O camera-ai como "cérebro" (2026-10-24)
+
+A IA saiu do navegador e passou a rodar **no camera-ai** (`server/ai.mjs`), uma vez por câmera,
+mandando o resultado para todas as telas (`/api/screen/events`). Medido no PC: o modelo carrega em
+~27 s na 1ª vez (download, depois fica em `server/models/`) e analisa um quadro em **~75 ms** (WASM),
+então 5 análises por segundo sobram. A análise usa o sub (800×448) e só roda enquanto alguma tela
+escuta.
+
+| | PC ligado (camera-ai) | PC desligado ou caiu |
+|---|---|---|
+| Vídeo na TV | a lente recortada do main, 1920×1080 nítido (`/api/screen/video`) | o sub direto da câmera, recortado na TV |
+| IA (pessoa/animal) | sim, a mesma em todas as telas | não |
+| Movimento | sim (detector da própria câmera) | sim (detector da própria câmera) |
+| Dia/noite, brilho, cor, nitidez, WDR | pela lista de controles do camera-ai | direto na câmera (ONVIF) |
+| Lentes, som | sim | sim |
+| Funções novas do camera-ai | chegam sozinhas | não |
+
+**Atraso** (medido pelo relógio que a câmera escreve na imagem, 2026-10-24): antes, MJPEG em fila,
+~15 s na TV e 6 s (crescendo) numa tela a 8 fps. Agora: MJPEG pulando para o quadro mais novo, 2 s
+estáveis na mesma tela; H.264 na NVENC (RTX 3060), ~1 s. O ffmpeg abre o RTSP com `-fflags nobuffer
+-flags low_delay -probesize 500000 -analyzeduration 500000` (o padrão junta ~5 s antes de começar).
+
+A TV troca de modo sozinha: se o camera-ai cai, segue direto da câmera; a cada 20 s procura de novo
+e volta quando ele aparece.
+
+**Uma conexão só com a câmera** (`server/live.mjs`, 2026-10-24): com duas conexões ao vídeo
+principal, a segunda recebia **0,2 quadro por segundo** (buracos de até 25 s): a câmera não aguenta
+servir vários pelo Wi-Fi dela. Agora um ffmpeg só lê o principal e entrega as três vistas em H.264
+(inteira, cima, baixo, NVENC) e os quadros da IA; o navegador e o MJPEG também saem dele. Medido com
+duas telas ao mesmo tempo: **23,7 fps em cada**. A câmera ainda entrega em rajadas (14 pausas de mais
+de 0,5 s em 30 s, a maior 0,8 s): é o Wi-Fi dela. A TV absorve com uma reserva (Fluidez). É o mesmo
+que o Frigate faz com o go2rtc: uma conexão por câmera e as telas no restream.
+
+**Limite de banda do Wi-Fi da câmera** (2026-10-25, madrugada): 8192 kbps → o vídeo parou (0 fps) e o
+ping da câmera foi de ~6 ms para ~100 ms; voltou com 4096. Em 4096 deu 20 fps num momento e 7,6 fps
+(imagens até 6,8 s atrasadas) meia hora depois, com o **roteador também a ~97 ms** (rede da casa
+congestionada por outro aparelho). Conclusão até aqui: 4096 é o que funciona; o degrau acima precisa
+ser medido de novo com a rede calma (ping do roteador < 10 ms), em vários horários. A câmera está no
+Wi-Fi **5 GHz** (a TV no 2,4 GHz).
+
+**2,4 GHz × 5 GHz (câmera no 5, TV no 2,4)** — o caminho do vídeo é câmera →(Wi-Fi 5 GHz)→ roteador
+→(cabo)→ PC (camera-ai) →(cabo)→ roteador →(Wi-Fi 2,4 GHz)→ TV.
+- **5 GHz:** mais rápido e com menos interferência (vizinhos, Bluetooth, micro-ondas ficam no 2,4), mas
+  alcança menos e perde muito mais força atravessando paredes e lajes.
+- **2,4 GHz:** alcança mais longe e atravessa melhor as paredes, mas é mais lento e mais disputado.
+- **Estarem em faixas diferentes não atrapalha, até ajuda:** o vídeo que chega da câmera e o que sai para
+  a TV não disputam o mesmo rádio. A TV no 2,4 está ótima (sinal -36 dBm, 144 Mbps de conexão; precisa
+  de ~4 Mbps).
+- **Medido (2026-10-25, DVRIP `SystemInfo` `WifiAP` = busca de redes, e `WifiRouteInfo`):** o sinal da
+  câmera no 5 GHz é **-33 dBm, "Excellent", `SignalLevel` 100**. A "NEVES 2.4" chega a -38 dBm (canal 2),
+  e no 2,4 há mais 6 redes vizinhas, uma delas mais forte que a da casa (GTM_FAMILIA NEVES 2.4, -26 dBm,
+  canal 11). Então **o sinal não é o problema** e passar a câmera para o 2,4 não ajudaria (seria mais
+  lento e mais disputado): ficou no 5 GHz. As rajadas e o limite de ~4 Mbps vêm do rádio da própria
+  câmera ou do roteador congestionado (ping do roteador em ~97 ms na mesma hora), não do alcance.
+
+**DVRIP (porta 34567, admin / senha vazia, só leitura)** — o que o ONVIF não mostra:
+- `SystemInfo`: `HardWare XM232_X6S-WEQ-H_8M`, `DeviceModel X6S-WEQ-H`, firmware de 2026-03-23.
+- `SystemFunction`: **`SupportGunBallTwoSensorCamera`** (uma lente fixa "gun" + uma que gira "ball"),
+  `SupportGunBallTwoSensorPtzLocate` (apontar a móvel pela fixa), **`SupportDetectTrack`** (seguir pessoa
+  de fábrica), `SupportPTZDirectionControl`, `SupportPTZTour`, `SupportCameraWhiteLight`.
+- `Camera.WhiteLight`: `WorkMode: Intelligent`, das 18h às 6h, acende **60 s a cada movimento**
+  (`MoveTrigLight`). É a "luz branca que acende do nada". **Trocado para `Infrared` em 2026-10-25**
+  (a pedido: à noite só infravermelho, imagem P&B, sem luz branca). Para voltar: `WorkMode: Intelligent`
+  pelo DVRIP (`CONFIG_SET` 1040, mesmo objeto) ou no app iCSee.
+- `Camera.Param`: `ExposureParam.MostTime 0x10000` (até ~65 ms por imagem: no escuro não passa de
+  ~15 fps). `Camera.ParamEx`: `LowLuxMode 1` (modo pouca luz), `DayNightSwitch` com dia 07–18h.
+- `Detect.DetectTrack`: `Enable 0` (seguir pessoa desligado), `Sensitivity 2`, `ReturnTime 300`.
+- `NetWork.Wifi` devolve a **senha do Wi-Fi em texto** para quem logar com a senha vazia: pôr senha
+  na câmera (o camera-ai e a TV aceitam login).
+
+**Firmware aberto (OpenIPC):** para XiongMai compatíveis existe o *Coupler*, instalado pelo botão de
+atualização da própria câmera, **sem abrir**. Mas: voltar ao original só por UART (aí sim abrindo); o
+suporte é bom no XM530 e parcial nos outros; há relato de câmera XM que ligou sem vídeo por sensor sem
+driver. Não há registro desta placa (XM232 X6S, duas lentes, uma com motor). Risco alto, ganho incerto.
+
+**Dia/noite por horário** (padrão): noite das 19h às 6h (`IrCutFilter` OFF), dia no resto (ON), conferido
+a cada minuto e salvo em `server/state.json` (`dayNight`). No automático a câmera decide pela luz e
+fica trocando no fim de tarde; a **luz branca forte** dela acende e apaga junto com essa troca. Escolher
+Automático/Dia/Noite à mão desliga o horário. Só roda com o camera-ai ligado (a câmera guarda o
+último modo). Se a luz branca incomodar à noite, o modo de luz (infravermelho / colorido / inteligente)
+é do app iCSee; pelo ONVIF não dá para mudar (seria pelo DVRIP, porta 34567, ainda não feito).
+
+**Movimento sem PC:** a câmera tem detector próprio por eventos ONVIF, sem login:
+`CreatePullPointSubscription` em `/onvif/event_service`, depois `PullMessages` (precisa dos
+cabeçalhos WS-Addressing `To` e `Action`). Tópicos: `tns1:VideoSource/MotionAlarm` (`State`) e
+`tns1:RuleEngine/CellMotionDetector/Motion` (`IsMotion`).
+
+**Série** `a6c24791bc60bb3e7pt4` nos dois IPs: é assim que a TV sabe que .41 e .42 são o mesmo aparelho.
 
 ### Funções expostas na interface
 - Ver ao vivo (Nítido/Fluido), Foto, Gravar (local, `-c copy`), Ouvir (microfone),
