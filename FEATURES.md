@@ -45,6 +45,14 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       últimos 5 min × 1,3 + 0,25 s, de 0,5 a 4 s); no nevtv, Fluidez → Automático usa esse valor.
 - [ ] **Senha da câmera** (`/api/camera-password`): pronto no camera-ai, ainda não aplicado. Sem senha,
       a câmera entrega até a senha do Wi-Fi pelo DVRIP.
+- [x] **Perfil de cada câmera** (`server/perfil.mjs`, `server/perfis/<serial>.json`, `/api/perfil`): o que ela
+      tem, o que foi conferido e o histórico (vistorias, níveis, conexões, recursos). Ao conectar, lê o que a câmera
+      diz (ONVIF; nas XM, a lista `SystemFunction` pelo DVRIP). A **vistoria completa** (menu ☰ → Teste da câmera →
+      Vistoria completa, `/api/perfil/vistoria`) confere de verdade: acende a luz, troca a visão noturna, gira a
+      lente, e desfaz; só testa o que falta. Movimento confere sozinho no primeiro aviso. "Não tem" só com prova
+      clara; sem dar para ver (ex.: noturna com o quarto claro) fica "a conferir" e o botão continua. As telas só
+      mostram os botões que o perfil permite. Câmeras do mesmo modelo começam com o que já se sabe
+      (`server/perfis/modelos/`). Nesta câmera: motor, visão noturna, luz branca e movimento conferidos.
 - [x] **Uma conexão de vídeo por vez:** esta câmera não aguenta duas (medido em 25/10: com a TV direto no vídeo
       grande e o camera-ai no pequeno, a TV caiu para 5 quadros/s e o camera-ai travou). Sem tela assistindo pelo
       camera-ai, ele usa só o vídeo pequeno (~0,15 Mbps) para seguir e detectar; uma TV vendo direto avisa

@@ -20,6 +20,7 @@ import { dvrip, xmHash } from './dvrip.mjs';
 import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
 import { createClips } from './clips.mjs';
+import { createProfiles } from './perfil.mjs';
 
 const PORT = 8787;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -139,6 +140,7 @@ async function connect(addr, user, pass) {
         firmware: tag(info.text, 'FirmwareVersion'), serial: tag(info.text, 'SerialNumber'),
       };
       await loadProfiles();
+      await openProfile();
       saveState();
       const opt = await maybeOptimize();   // otimiza na conexão; no-op se já estiver bom
       return { ok: true, authUser: u, blankPass: p === '', optimized: opt.applied || false, ...publicState() };
@@ -585,7 +587,10 @@ const motionWatch = watchMotion({
   host: () => cam.addr,
   onChange: active => {
     const now = Date.now();
-    if (active) { motion.since = now; motion.last = now; }
+    if (active) {
+      motion.since = now; motion.last = now;
+      if (perfil && perfil.status('motion') !== 'ok') { perfil.verify('motion', 'ok', 'a câmera avisou movimento'); perfil.save(); }
+    }
     else if (motion.since) console.log(`${new Date().toLocaleTimeString('pt-BR')} Movimento na câmera (${Math.round((now - motion.since) / 1000)} s)`);
     if (!active) motion.since = null;
     broadcast({ type: 'motion', active, t: now });
@@ -650,12 +655,12 @@ async function setWhiteLight(on) {
 async function screenControls() {
   if (!cam.addr) return [];
   // Só o que se usa: o resto (brilho, contraste, cor, nitidez, contraluz, vídeo, clipes) fica no navegador
-  const night = cam.dvr ? await nightVision().catch(() => null) : null;
-  const light = cam.dvr ? await whiteLight().catch(() => null) : null;
+  const night = cam.dvr && perfil?.has('night') !== false ? await nightVision().catch(() => null) : null;
+  const light = cam.dvr && perfil?.has('light') !== false ? await whiteLight().catch(() => null) : null;
   return [
     ...(night == null ? [] : [{ id: 'night', type: 'toggle', label: L('Visão noturna', 'Night vision'), value: night }]),
     ...(light == null ? [] : [{ id: 'light', type: 'toggle', label: L('Luz branca', 'White light'), value: light }]),
-    ...(PROFILE.ptz?.personFollow ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
+    ...(PROFILE.ptz?.personFollow && perfil?.has('motor') !== false ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
   ];
 }
 
@@ -715,8 +720,10 @@ setInterval(() => {
   const now = quality.level.push(g);
   quality.last = { at: Date.now(), stream: videoPick.using, ...s, ...g };
   quality.bursts = [...quality.bursts, s.burstMs].slice(-30);
-  if (before !== null && now !== before)
+  if (before !== null && now !== before) {
     console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria: ${LEVELS[before].pt} → ${LEVELS[now].pt} (${g.reasons.join('; ') || 'estável'})`);
+    perfil?.event('nivel', `${LEVELS[before].pt} → ${LEVELS[now].pt}`, { level: now, reasons: g.reasons });
+  }
   applyVideoPick();
 }, 10000);
 
@@ -790,19 +797,166 @@ async function runVistoria(seconds = 30) {
 
 // O que a câmera tem: a lista ✅/❌ da vistoria.
 async function cameraChecks() {
-  const img = cam.addr ? await getImaging().catch(() => null) : null;
-  const events = PROFILE.events || [];
+  const caps = perfil?.data.caps || {};
   return [
-    { id: 'video', label: L('Vídeo ao vivo', 'Live video'), ok: !!mainProfile()?.rtsp },
-    { id: 'onvif', label: L('Padrão aberto (ONVIF)', 'Open standard (ONVIF)'), ok: !!cam.addr },
-    { id: 'imaging', label: L('Ajustes de imagem', 'Image settings'), ok: !!img },
-    { id: 'daynight', label: L('Dia/noite', 'Day/night'), ok: !!img?.ircut },
-    { id: 'motion', label: L('Aviso de movimento da câmera', 'Camera motion alerts'), ok: events.some(e => /Motion/i.test(e)) },
-    { id: 'camPerson', label: L('A câmera detecta pessoa sozinha', 'Camera detects people'), ok: events.some(e => /People|Human|Person/i.test(e)) },
-    { id: 'ai', label: L('IA de pessoa e animal (camera-ai)', 'Person/animal AI (camera-ai)'), ok: ai.status === 'on' },
-    { id: 'motor', label: L('Motor (girar a lente)', 'Motor (pan/tilt)'), ok: !!cam.dvr && !!PROFILE.ptz?.personFollow },
-    { id: 'audio', label: L('Microfone', 'Microphone'), ok: PROFILE.audio?.microphone !== false && !!live },
+    ...Object.entries(CAP_LABELS).filter(([id]) => caps[id]).map(([id, label]) => ({ id, label, status: caps[id].status, how: caps[id].how,
+      ok: caps[id].status !== 'no' })),
+    { id: 'ai', label: L('IA de pessoa e animal (camera-ai)', 'Person/animal AI (camera-ai)'), status: ai.status === 'on' ? 'ok' : 'no', ok: ai.status === 'on' },
   ];
+}
+
+// ---------- Perfil da câmera (server/perfil.mjs) e a vistoria completa ----------
+// Ao conectar: lê o que a câmera diz que tem (ONVIF e, nas XM, a lista SystemFunction pelo DVRIP). A vistoria
+// completa (pedida pela pessoa) confere de verdade: mexe, olha a imagem e desfaz. As telas só mostram o que não
+// deu "não tem". Tudo fica no perfil, com o histórico, achado pelo número de série.
+const perfis = createProfiles(path.join(HERE, 'perfis'));
+let perfil = null;
+const CAP_LABELS = {
+  video: L('Vídeo ao vivo', 'Live video'),
+  twoLenses: L('Duas lentes', 'Two lenses'),
+  motor: L('Motor (girar a lente)', 'Motor (pan/tilt)'),
+  light: L('Luz branca', 'White light'),
+  night: L('Visão noturna', 'Night vision'),
+  motion: L('Aviso de movimento da câmera', 'Camera motion alerts'),
+  camPerson: L('A câmera detecta pessoa sozinha', 'Camera detects people'),
+  camTrack: L('Seguir de fábrica', 'Built-in tracking'),
+  audio: L('Microfone', 'Microphone'),
+  talk: L('Falar pela câmera', 'Talk through the camera'),
+  siren: L('Alarme de voz da câmera', 'Camera voice alarm'),
+};
+async function openProfile() {
+  const before = perfil?.data.serial;
+  perfil = perfis.open({ serial: cam.info.serial, model: cam.info.model, firmware: cam.info.firmware });
+  if (perfil.data.lastAddr !== cam.addr) {
+    perfil.data.lastAddr = cam.addr;
+    perfil.event('conexao', `Conectada em ${cam.addr}`);
+  }
+  // O que a câmera diz que tem
+  const fn = new Set();
+  if (cam.dvr) {
+    try {
+      const r = await (await dvrSession()).request(1360, { Name: 'SystemFunction' });
+      const walk = (o) => { for (const [k, v] of Object.entries(o || {})) { if (v === true) fn.add(k); else if (v && typeof v === 'object') walk(v); } };
+      walk(r.SystemFunction);
+    } catch {}
+  }
+  const events = PROFILE.events || [];
+  const said = fn.size ? 'a câmera diz (SystemFunction)' : 'o padrão ONVIF diz';
+  perfil.declare('video', !!mainProfile()?.rtsp, 'RTSP pelo ONVIF');
+  perfil.declare('twoLenses', fn.has('SupportGunBallTwoSensorCamera') || PROFILE.lenses?.count === 2, said);
+  perfil.declare('motor', fn.has('SupportPTZDirectionControl') || !!PROFILE.ptz, said);
+  perfil.declare('light', fn.has('SupportCameraWhiteLight'), said);
+  perfil.declare('night', !!cam.dvr && (fn.has('SupManualSwitchDayNight') || fn.has('SupportSoftPhotosensitive')), said);
+  perfil.declare('motion', fn.has('MotionDetect') || events.some(e => /Motion/i.test(e)), said);
+  perfil.declare('camPerson', fn.has('HumanDection') || events.some(e => /People|Human|Person/i.test(e)), said);
+  perfil.declare('camTrack', fn.has('SupportDetectTrack'), said);
+  perfil.declare('audio', PROFILE.audio?.microphone !== false, 'perfil do modelo');
+  perfil.declare('talk', fn.has('SupportTwoWayVoiceTalk') || fn.has('Talk'), said);
+  perfil.declare('siren', fn.has('SupportAlarmVoiceTips'), said);
+  perfil.save();
+  if (before !== perfil.data.serial) {
+    const caps = perfil.data.caps, n = (s) => Object.values(caps).filter(c => c.status === s).length;
+    console.log(`Perfil da câmera ${cam.info.serial}: ${n('ok')} conferidos, ${n('declared') + n('model') + n('unverified')} a conferir, ${n('no')} que ela não tem`);
+  }
+}
+
+// A imagem agora, pequena, para os testes: brilho, quanta cor e os pixels (para comparar antes/depois).
+// Usa o snapshot HTTP da câmera: não abre outra conexão de vídeo.
+async function imageStats(part = 'whole') {
+  const jpg = await snapshot();
+  const crop = part === 'bottom' ? 'crop=iw:ih/2:0:ih/2,' : part === 'top' ? 'crop=iw:ih/2:0:0,' : '';
+  const rgb = await new Promise((ok, err) => {
+    const ff = spawn(FFMPEG, ['-loglevel', 'error', '-i', 'pipe:0', '-vf', `${crop}scale=160:-2,format=rgb24`, '-f', 'rawvideo', 'pipe:1']);
+    const out = []; ff.stdout.on('data', d => out.push(d));
+    ff.on('close', c => c === 0 ? ok(Buffer.concat(out)) : err(new Error('ffmpeg ' + c)));
+    ff.on('error', err); ff.stdin.end(jpg);
+  });
+  let luma = 0, color = 0;
+  const gray = new Uint8Array(rgb.length / 3);
+  for (let i = 0, j = 0; i < rgb.length; i += 3, j++) {
+    const r = rgb[i], g = rgb[i + 1], b = rgb[i + 2];
+    gray[j] = (r * 3 + g * 6 + b) / 10;
+    luma += gray[j]; color += Math.abs(r - g) + Math.abs(g - b);
+  }
+  return { luma: luma / gray.length, color: color / gray.length, gray };
+}
+const wait = (ms) => new Promise(ok => setTimeout(ok, ms));
+const diff = (a, b) => { let s = 0; for (let i = 0; i < Math.min(a.length, b.length); i++) s += Math.abs(a[i] - b[i]); return s / Math.min(a.length, b.length); };
+
+const fullVistoria = { running: false, last: null };
+async function runFullVistoria() {
+  if (fullVistoria.running) return { ok: false, error: 'já está rodando' };
+  if (!perfil || !cam.addr) return { ok: false, error: 'sem câmera' };
+  fullVistoria.running = true;
+  const log = (t) => console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria completa: ${t}`);
+  const followWas = follow.enabled;
+  follow.enabled = false;   // o seguir não mexe no motor durante os testes
+  const results = [];
+  const note = (id, status, how) => { perfil.verify(id, status, how); results.push({ id, status, how }); log(`${id} → ${status} (${how})`); };
+  // Só o que falta conferir: o que já deu certo não pisca nem gira de novo (firmware novo volta a conferir)
+  const todo = (id) => perfil.has(id) && perfil.status(id) !== 'ok';
+  try {
+    log('começando (a luz pode acender e a lente girar por uns segundos)');
+    // Luz branca: acende, a imagem tem que clarear
+    // A exposição automática da câmera compensa parte da luz: clarear OU ganhar cor conta. Sem mudança na imagem
+    // mas com a câmera aceitando o comando, fica "não deu para conferir" (o botão continua)
+    if (todo('light') && cam.dvr) {
+      const was = await whiteLight();
+      const a = await imageStats();
+      const set = await setWhiteLight(true); await wait(8000);
+      const accepted = set.ok && await whiteLight();
+      const b = await imageStats();
+      await setWhiteLight(was);
+      const up = b.luma - a.luma, colored = b.color - a.color;
+      if (up >= 15 || colored >= 10) note('light', 'ok', `acesa, a imagem ${up >= 15 ? `clareou ${Math.round(up)}` : 'ganhou cor'}`);
+      else if (accepted) note('light', 'unverified', 'a câmera aceitou acender, mas a imagem não mostrou (exposição automática?)');
+      else note('light', 'no', 'a câmera recusou acender a luz');
+    }
+    // Visão noturna: só dá para ver com a imagem em preto e branco (escuro): força o dia e ela tem que ganhar cor
+    if (todo('night') && cam.dvr) {
+      const was = await nightVision();
+      const a = await imageStats();
+      if (a.color < 30) {
+        await setNightVision(false); await wait(12000);
+        const b = await imageStats();
+        await setNightVision(was);
+        if (b.color - a.color >= 10) note('night', 'ok', 'saiu do preto e branco para colorido');
+        else note('night', 'unverified', 'mandou trocar e a imagem não mudou ainda');
+      } else if (perfil.status('night') !== 'ok') note('night', 'unverified', 'a imagem está colorida (claro): conferir com o ambiente escuro');
+    }
+    // Motor: um pulso para o lado, a imagem da lente que gira tem que mudar; depois volta ao preset 1
+    if (todo('motor') && cam.dvr) {
+      const part = PROFILE.lenses?.layout === 'stacked-vertical' ? 'bottom' : 'whole';
+      const a = await imageStats(part);
+      await ptz('right', 'start', 3); await wait(600); await ptz('right', 'stop', 3); await wait(2000);
+      const b = await imageStats(part);
+      await ptz('home', 'start').catch(() => {});
+      const d = diff(a.gray, b.gray);
+      if (d >= 10) note('motor', 'ok', `girou, a imagem mudou ${Math.round(d)}`);
+      else note('motor', 'no', `mandou girar e a imagem não mudou (${Math.round(d)})`);
+    }
+    // Movimento: conferido quando a câmera avisar de verdade (fica marcado sozinho)
+    if (perfil.has('motion') && perfil.status('motion') !== 'ok') results.push({ id: 'motion', status: perfil.status('motion'), how: 'confere sozinho no primeiro aviso de movimento' });
+    const ok = results.filter(r => r.status === 'ok').length;
+    perfil.event('vistoria', `Vistoria completa: ${ok} de ${results.length} conferidos`, { results, level: quality.level.level });
+    fullVistoria.last = { at: Date.now(), results };
+    log(`pronta: ${ok} de ${results.length} conferidos`);
+    return { ok: true, results };
+  } catch (e) {
+    log('parou: ' + e.message);
+    return { ok: false, error: e.message };
+  } finally {
+    follow.enabled = followWas;
+    follow.lostAt = 0; follow.returned = false;
+    fullVistoria.running = false;
+  }
+}
+function perfilInfo() {
+  if (!perfil) return { ok: false, error: 'sem câmera' };
+  const p = perfil.data;
+  return { ok: true, serial: p.serial, model: p.model, firmware: p.firmware, firstSeen: p.firstSeen, running: fullVistoria.running,
+    caps: Object.entries(CAP_LABELS).filter(([id]) => p.caps[id]).map(([id, label]) => ({ id, label, ...p.caps[id] })),
+    history: p.history.slice(-50).reverse() };
 }
 
 async function vistoriaInfo() {
@@ -1146,6 +1300,8 @@ const server = http.createServer(async (req, res) => {
         if (b.delete) return json(res, 200, { ok: !!clips?.remove(String(b.delete)) });
         return json(res, 200, setClips(b.enabled));
       }
+      case '/api/perfil': return json(res, 200, perfilInfo());
+      case '/api/perfil/vistoria': return json(res, 200, await runFullVistoria());
       case '/api/access/pending': return json(res, 200, { requests: pendingRequests() });
       case '/api/access/answer': { const b = await readBody(req); return json(res, 200, accessAnswer(b.id, !!b.allow)); }
       case '/api/camera-password': { const b = await readBody(req); return json(res, 200, await setCameraPassword(b.password)); }

@@ -156,3 +156,10 @@ menu button{flex:1;border:0;border-radius:14px;padding:14px;font-size:16px;font-
 .ev-txt{flex:1;display:flex;flex-direction:column;gap:2px;cursor:pointer;min-width:0}
 .ev-txt span{font:500 12px/1.2 var(--mono);color:var(--muted)}
 .ev-del{border:0;background:transparent;font-size:18px;cursor:pointer;padding:8px;color:var(--ink)}
+
+/* Vistoria: histórico da câmera (perfil) */
+.v-head { font-size: 13px; font-weight: 600; margin: 16px 0 6px; color: var(--muted, #9aa0a6); text-transform: uppercase; letter-spacing: .04em; }
+.v-history { list-style: none; margin: 0; padding: 0; max-height: 180px; overflow: auto; font-size: 13px; }
+.v-history li { padding: 4px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
+.v-history time { font-family: 'Geist Mono', monospace; opacity: .7; margin-right: 6px; }
+.v-checks small { opacity: .7; }

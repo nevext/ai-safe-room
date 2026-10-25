@@ -14,3 +14,5 @@ server/models/
 server/state.json
 # clipes de quando aparece alguém (imagens de dentro de casa)
 server/eventos/
+# perfil de cada câmera (número de série, IPs, histórico)
+server/perfis/

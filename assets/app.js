@@ -230,12 +230,31 @@ function showVistoria(v){
   const m = n ? [['Quadros/s', n.fps + (n.filmedFps ? ' / ' + n.filmedFps : '')], ['Banda', (n.kbps / 1000).toFixed(1) + ' Mbps'],
     ['Rajadas', (n.burstMs / 1000).toFixed(1) + ' s'], ['Perdidos', n.lostPct + '%'], ['Travadas', n.stalls], ['Quedas (1 h)', n.reconnectsLastHour]] : [];
   $('#vMeasures').innerHTML = m.map(([k, x]) => `<div><dt>${k}</dt><dd>${x}</dd></div>`).join('');
-  $('#vChecks').innerHTML = (v.checks || []).map(c => `<li class="${c.ok ? '' : 'no'}">${c.label.pt}</li>`).join('');
+  const said = { ok: 'conferido', no: 'não tem', declared: 'a conferir', unverified: 'não deu para conferir agora', model: 'pelo modelo' };
+  $('#vChecks').innerHTML = (v.checks || []).map(c => `<li class="${c.ok ? '' : 'no'}" title="${c.how || ''}">${c.label.pt}`
+    + `${c.status && c.status !== 'ok' && c.status !== 'no' ? ` <small>(${said[c.status] || c.status})</small>` : ''}</li>`).join('');
   $('#vTips').innerHTML = (v.tips || []).map(t => `<li>${t}</li>`).join('');
 }
 const refreshVistoria = () => api('/api/vistoria').then(showVistoria).catch(() => {});
 refreshVistoria(); setInterval(refreshVistoria, 15000);
 $('#miVistoria')?.addEventListener('click', () => { menuDlg.close(); refreshVistoria(); vDlg.showModal(); });
+// Vistoria completa: confere cada recurso de verdade (a luz acende e a lente gira um pouco) e guarda no perfil
+$('#vFull')?.addEventListener('click', async function(){
+  if (!confirm('A vistoria completa acende a luz branca e gira a lente por alguns segundos para conferir o que a câmera faz. Continuar?')) return;
+  this.disabled = true; $('#vSub').textContent = 'Vistoria completa: conferindo cada recurso (uns 40 s)…';
+  try { const r = await api('/api/perfil/vistoria', { method:'POST' }); toast(r.ok ? `Pronta: ${r.results.filter(x => x.status === 'ok').length} de ${r.results.length} conferidos.` : r.error); }
+  catch (e){ toast('Vistoria falhou: ' + e.message); }
+  this.disabled = false; refreshVistoria(); showHistory();
+});
+// O histórico da câmera (perfil): vistorias, níveis, recursos conferidos, conexões
+function showHistory(){
+  api('/api/perfil').then(p => {
+    if (!p.ok) return;
+    $('#vHistory').innerHTML = (p.history || []).slice(0, 15).map(h =>
+      `<li><time>${new Date(h.at).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</time> ${h.text}</li>`).join('');
+  }).catch(() => {});
+}
+$('#miVistoria')?.addEventListener('click', showHistory);
 $('#vRun')?.addEventListener('click', async function(){
   this.disabled = true; $('#vSub').textContent = 'Testando a câmera (uns 60 s)…';
   try { await api('/api/vistoria', { method:'POST', body: JSON.stringify({ seconds: 30 }) }); }
