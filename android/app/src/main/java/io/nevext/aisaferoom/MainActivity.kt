@@ -105,6 +105,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
     var screen by remember { mutableStateOf<Screen>(if (live.hub == null) Screen.Find else Screen.Splash) }
     var tab by remember { mutableStateOf<Screen>(Screen.Home) }
     var fullscreen by remember { mutableStateOf<String?>(null) }   // the view shown full screen, if any
+    var previous by remember { mutableStateOf<Screen>(Screen.Home) }   // where back goes from a screen opened over another
     val activity = LocalContext.current as Activity
 
     val keep = { h: Hub ->
@@ -177,13 +178,18 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
         onDispose {}
     }
 
-    val open = { s: Screen -> screen = s }
+    val open = { s: Screen -> previous = screen; screen = s }
     val back = { screen = tab }
     val h = live.hub
     Box(Modifier.fillMaxSize()) {
         when (val s = screen) {
             Screen.Splash -> SplashScreen()
-            Screen.Find -> FindScreen(onFound = { root, inside -> if (inside) keep(Hub(root, null)) else screen = Screen.LetIn(root) })
+            Screen.Find -> {
+                // Opened from "+" with a computer already connected: back returns to the app
+                if (h != null) BackHandler(onBack = back)
+                FindScreen(onFound = { root, inside -> if (inside) keep(Hub(root, null)) else screen = Screen.LetIn(root) },
+                    onBack = if (h != null) back else null)
+            }
             is Screen.LetIn -> LetInScreen(s.root, onKey = { keep(Hub(s.root, it)) }, onBack = { screen = Screen.Find })
             Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, onTab = { tab = it; screen = it }) {
                 when (s) {
@@ -199,8 +205,9 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
                 CameraScreen(live, visible, onBack = back, onFeatures = { open(Screen.Features) }, onFullscreen = { fullscreen = it })
             }
             Screen.Features -> if (h != null) {
-                BackHandler { screen = Screen.Camera }
-                FeaturesScreen(live, onBack = { screen = Screen.Camera })
+                val from = { screen = if (previous == Screen.Camera) Screen.Camera else tab }
+                BackHandler(onBack = from)
+                FeaturesScreen(live, onBack = from)
             }
             Screen.System -> {
                 BackHandler(onBack = back)

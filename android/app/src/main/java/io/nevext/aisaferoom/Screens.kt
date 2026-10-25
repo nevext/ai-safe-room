@@ -381,25 +381,27 @@ fun CameraScreen(live: Live, visible: Boolean, onBack: () -> Unit, onFeatures: (
         }
         // The camera's switches (night vision, white light, follow), as cards side by side
         val toggles = (0 until live.controls.length()).mapNotNull { live.controls.optJSONObject(it) }.filter { it.optString("type") == "toggle" }
+        val flip = { c: JSONObject, want: Boolean ->
+            val id = c.optString("id")
+            c.put("value", want)
+            live.controls = org.json.JSONArray(live.controls.toString())
+            scope.launch {
+                withContext(Dispatchers.IO) { runCatching { hub.control(id, want) } }
+                    .onSuccess { live.controls = it }
+                    .onFailure { live.problem = "Não deu para mudar: ${it.message}" }
+            }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             toggles.forEach { c ->
                 val on = c.optBoolean("value")
                 val id = c.optString("id")
-                Column(Modifier.weight(1f).card(palette).clickable {}.padding(12.dp)) {
+                Column(Modifier.weight(1f).card(palette).clickable { flip(c, !on) }.padding(12.dp)) {
                     IconBubble(ICONS[id] ?: Icons.Outlined.Settings, size = 36)
                     Text(c.optJSONObject("label")?.optString("pt") ?: id, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = 10.dp), maxLines = 2)
                     Text(if (on) (if (id == "follow") "Ativado" else "Ativada") else (if (id == "follow") "Desativado" else "Desativada"),
                         fontSize = 11.sp, color = if (on) Blue else palette.muted)
-                    Switch(on, onCheckedChange = { want ->
-                        c.put("value", want)
-                        live.controls = org.json.JSONArray(live.controls.toString())
-                        scope.launch {
-                            withContext(Dispatchers.IO) { runCatching { hub.control(id, want) } }
-                                .onSuccess { live.controls = it }
-                                .onFailure { live.problem = "Não deu para mudar: ${it.message}" }
-                        }
-                    }, colors = SwitchDefaults.colors(checkedTrackColor = Blue), modifier = Modifier.padding(top = 4.dp))
+                    Switch(on, onCheckedChange = { flip(c, it) }, colors = SwitchDefaults.colors(checkedTrackColor = Blue), modifier = Modifier.padding(top = 4.dp))
                 }
             }
         }
@@ -430,6 +432,7 @@ private val FILTERS = listOf(
 fun ActivityScreen(live: Live) {
     val hub = live.hub ?: return
     var filter by remember { mutableStateOf(0) }
+    var opened by remember { mutableStateOf<JSONObject?>(null) }
     val all = (0 until live.activity.length()).mapNotNull { live.activity.optJSONObject(it) }
     val shown = FILTERS[filter].second.let { types -> if (types.isEmpty()) all else all.filter { it.optString("type") in types } }
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 20.dp)) {
@@ -448,13 +451,29 @@ fun ActivityScreen(live: Live) {
             Text(if (all.isEmpty()) "Nada por aqui ainda. Movimentos, pessoas e mudanças da câmera aparecem aqui." else "Nada deste tipo ainda.",
                 color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 24.dp))
         }
-        items(shown) { a -> ActivityRow(hub, a) }
+        items(shown) { a -> ActivityRow(hub, a) { opened = a } }
         item { Spacer(Modifier.height(20.dp)) }
+    }
+    // The activity big: its picture (if it has one), what and when
+    opened?.let { a ->
+        androidx.compose.ui.window.Dialog(onDismissRequest = { opened = null }) {
+            Column(Modifier.fillMaxWidth().card(palette, 20.dp).padding(14.dp)) {
+                a.optString("thumb").takeIf { it.isNotEmpty() && it != "null" }?.let { name ->
+                    val pic = rememberPicture(hub, hub.thumbUrl(name))
+                    Box(Modifier.fillMaxWidth().aspectRatio(0.9f).clip(RoundedCornerShape(14.dp)).background(Color(0xFF0B0F17))) {
+                        pic?.let { Image(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                    }
+                }
+                Text(a.optString("text"), fontWeight = FontWeight.SemiBold, fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
+                Text("${whenText(a.optLong("at"))} · ${a.optString("camera")}", color = palette.muted, fontSize = 13.sp)
+                TextButton(onClick = { opened = null }, modifier = Modifier.align(Alignment.End)) { Text("Fechar", color = Blue) }
+            }
+        }
     }
 }
 
 @Composable
-private fun ActivityRow(hub: Hub, a: JSONObject) {
+private fun ActivityRow(hub: Hub, a: JSONObject, onOpen: () -> Unit) {
     val type = a.optString("type")
     val (icon, tint, bg) = when (type) {
         "motion" -> Triple(Icons.AutoMirrored.Outlined.DirectionsWalk, Blue, palette.soft)
@@ -465,7 +484,8 @@ private fun ActivityRow(hub: Hub, a: JSONObject) {
         "light" -> Triple(Icons.Outlined.Lightbulb, Blue, palette.soft)
         else -> Triple(Icons.Outlined.Shield, Blue, palette.soft)
     }
-    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onOpen).padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
         IconBubble(icon, tint, bg, size = 42)
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text(a.optString("text"), fontSize = 14.sp, fontWeight = FontWeight.Medium)
@@ -663,7 +683,7 @@ fun FeaturesScreen(live: Live, onBack: () -> Unit) {
 // MARK: - Achar o computador e entrar
 
 @Composable
-fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit) {
+fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onBack: (() -> Unit)? = null) {
     var searching by remember { mutableStateOf(true) }
     var found by remember { mutableStateOf<List<Found>>(emptyList()) }
     var address by remember { mutableStateOf("") }
@@ -684,7 +704,8 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit) {
         if (found.size == 1) tryRoot(found[0].root)
     }
     Page {
-        Column(Modifier.fillMaxWidth().padding(top = 48.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        onBack?.let { TopBar("", null, it) }
+        Column(Modifier.fillMaxWidth().padding(top = if (onBack == null) 48.dp else 8.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Shield(72.dp)
             Brand(26.sp, Modifier.padding(top = 18.dp))
             Text("Conecte ao computador de casa que cuida das câmeras. O celular precisa estar no mesmo Wi-Fi.",

@@ -426,7 +426,7 @@ const meter = createMeter();
 const live = HAS_FFMPEG && H264 ? createLive({
   ffmpeg: FFMPEG, inputArgs: LIVE_IN, rtsp: () => (videoPick.using = pickedStream()) === 'sub' ? subProfile()?.rtsp : mainProfile()?.rtsp, encoder: H264, meter,
   views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'],
-  onViewers: () => setTimeout(applyVideoPick, 0),
+  onViewers: () => viewersChanged(),
   aiFps: 10,   // a IA fica só com o quadro mais novo: num detector lento, ela mesma analisa menos
 }) : null;
 
@@ -735,10 +735,19 @@ setInterval(() => {
 
 // Qual vídeo da câmera o ao vivo puxa: no automático, o pequeno só no Nível 1 (a câmera engasgando no grande).
 const videoPick = { choice: (() => { try { return JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).video || 'auto'; } catch { return 'auto'; } })(), using: 'main' };
+// Uma tela chegou: o vídeo grande já. Saiu a última: espera 30 s antes do pequeno, porque trocar de tela no app
+// (ou de lente) fecha um vídeo e abre outro, e cada troca reconectava a câmera (~10 s de tela preta)
+let quietTimer = null, viewersGoneAt = 0;
+function viewersChanged() {
+  clearTimeout(quietTimer);
+  if (live?.viewers) { viewersGoneAt = 0; return setTimeout(applyVideoPick, 0); }
+  if (!viewersGoneAt) viewersGoneAt = Date.now();
+  quietTimer = setTimeout(applyVideoPick, 30500);
+}
 function pickedStream() {
   // Só a IA (seguir, clipes): o vídeo pequeno basta e gasta quase nada da câmera (~0,15 Mbps). O grande só com
   // uma tela assistindo por aqui
-  if (!live?.viewers) return 'sub';
+  if (!live?.viewers) return viewersGoneAt && Date.now() - viewersGoneAt < 30000 ? videoPick.using : 'sub';
   if (videoPick.choice !== 'auto') return videoPick.choice;
   return quality.level.level === 1 && subProfile() !== mainProfile() ? 'sub' : 'main';
 }
