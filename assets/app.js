@@ -28,6 +28,7 @@ function setStatus(state, msg){ dot.dataset.state = state; if (msg){ overlayMsg.
 
 async function api(path, opts){
   const r = await fetch(cfg.proxy + path, { headers:{'content-type':'application/json'}, ...opts });
+  if (r.status === 401) { location.reload(); throw new Error('precisa da senha'); }   // o servidor mostra a tela de senha
   const ct = r.headers.get('content-type') || '';
   const data = ct.includes('json') ? await r.json() : await r.blob();
   if (!r.ok) throw new Error((data && data.error) || (path + ' → ' + r.status));
@@ -269,6 +270,15 @@ async function showEvents(){
     list.appendChild(row);
   }
 }
+// Senha do camera-ai (celular e TV pedem uma vez; o próprio PC entra sem)
+$('#miPassword')?.addEventListener('click', async () => {
+  menuDlg.close();
+  const p = prompt('Senha nova do camera-ai (pelo menos 4 caracteres). Celulares e TVs vão pedir de novo.');
+  if (p == null) return;
+  if (p !== prompt('Repita a senha nova')) return toast('As duas não são iguais; nada mudou.');
+  try { const r = await api('/api/password', { method:'POST', body: JSON.stringify({ password: p }) }); toast(r.ok ? 'Senha trocada.' : r.error); }
+  catch (e) { toast('Não deu: ' + e.message); }
+});
 $('#miEvents')?.addEventListener('click', () => { menuDlg.close(); $('#evVideo').hidden = true; showEvents(); evDlg.showModal(); });
 evDlg?.addEventListener('close', () => { const v = $('#evVideo'); v.pause(); v.removeAttribute('src'); v.load(); });
 $('#evOn')?.addEventListener('change', async function(){

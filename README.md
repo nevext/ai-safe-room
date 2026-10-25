@@ -116,6 +116,9 @@ Abrir:
 Login: a interface tenta `admin`/senha vazia e padrões XM sozinha. Trocou a senha no app?
 Ponha no ⚙. Gravações caem em `server/gravacoes/`.
 
+Senha do camera-ai: no próprio PC não pede. Celular e TV pedem uma vez. Ela é criada na primeira
+vez que o camera-ai liga e aparece em `server\camera-ai.log`; troque no menu ☰ → Senha.
+
 ## Estrutura
 
 ```

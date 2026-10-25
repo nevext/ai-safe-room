@@ -140,7 +140,8 @@ export function createLevel({ riseMs = 10 * 60e3, dropAfter = 6 } = {}) {
       if (!g) return level;
       history.push({ at: now, level: g.level });
       history = history.filter(h => h.at > now - riseMs);
-      if (level === null) { level = g.level; return level; }
+      // O começo da conexão engasga: a primeira medida não derruba para o 1 (cai depois, pelas mesmas regras)
+      if (level === null) { level = Math.max(g.level, 2); return level; }
       if (g.level < level) {
         if (++badStreak >= dropAfter) { level = Math.max(...history.slice(-dropAfter).map(h => h.level)); badStreak = 0; }
       } else {

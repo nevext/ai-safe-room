@@ -20,7 +20,9 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
 - [ ] **Seguir pessoa (motor validado; falta o teste com alguém andando):** a IA acompanha a pessoa,
       move a lente inferior pelo DVRIP e volta ao preset 1 após 12 s sem detecção (conferido). Direções
       conferidas na câmera (pulso de 450 ms ≈ 1/4 da imagem). Cada movimento vai para o log. Fica
-      lembrado entre reinícios. O rastreamento de fábrica permanece desligado.
+      lembrado entre reinícios. O rastreamento de fábrica permanece desligado. Só a lente móvel guia o
+      motor (a busca pela lente fixa tirava a móvel da vista do quarto). Preset 1 salvo de novo em
+      25/10 apontando para o quarto (`{"dir":"sethome"}` em `/api/ptz` salva onde a lente está).
 - [x] **Teste da câmera (vistoria) e níveis** (`/api/vistoria`, menu ☰ → Teste da câmera): mede o
       vídeo como a câmera manda (quadros que chegam × filmados, rajadas, perdas, travadas, quedas), sem
       abrir conexão a mais; nível 1/2/3 em segundo plano (desce em ~30 s, sobe após 10 min estável);
@@ -34,6 +36,12 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       que a IA vê e desliza junto, sem motor (qualquer câmera); volta à imagem inteira após 3 s sem
       ninguém. Quadrados da IA agora no lugar certo com uma lente só (o corte do object-fit era ignorado).
       Falta: o mesmo no nevtv e o teste com alguém andando.
+- [x] **Senha do camera-ai:** o próprio PC entra direto; celular e TV pedem a senha uma vez (o
+      navegador guarda um cookie, a TV uma chave). Criada na primeira vez (aparece no log), trocada no
+      menu ☰ → Senha. 5 erros seguidos: 1 minuto de espera. Só `index.html` e `assets/` são servidos
+      (antes, `server/state.json` e os clipes saíam para qualquer um na rede).
+- [ ] **Senha da câmera** (`/api/camera-password`): pronto no camera-ai, ainda não aplicado. Sem senha,
+      a câmera entrega até a senha do Wi-Fi pelo DVRIP.
 - [x] **API das telas** (`/api/screen`): as TVs com o nevtv mostram a câmera com vídeo nítido, IA e
       os controles que o camera-ai listar; sem o PC, seguem direto da câmera (sem IA).
 - [x] Interface estilo nevext (Geist, azul #2563eb), player com controles que somem,

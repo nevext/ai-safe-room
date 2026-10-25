@@ -16,7 +16,7 @@ import dgram from 'node:dgram';
 import os from 'node:os';
 import { loadModel, analyzer } from './ai.mjs';
 import { createLive, keyframeAt } from './live.mjs';
-import { dvrip } from './dvrip.mjs';
+import { dvrip, xmHash } from './dvrip.mjs';
 import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
 import { createClips } from './clips.mjs';
@@ -90,7 +90,7 @@ const COMMON_CREDS = PROFILE.credentials || [['admin', ''], ['admin', 'admin'], 
 
 const cam = { addr: null, user: 'admin', pass: '', onvif: null, dvr: null, ptzDir: null, profiles: [], info: {}, snapUri: null, streamUri: null, videoSource: 'V_SRC_000' };
 const follow = { wanted: (() => { try { return !!JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).follow; } catch { return false; } })(),
-  enabled: false, lastMove: 0, lostAt: 0, returned: false, searchPulses: 0, hitFrames: 0, timer: null };
+  enabled: false, lastMove: 0, lostAt: 0, returned: false, hitFrames: 0, timer: null };
 
 // ---------- helpers HTTP ----------
 const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
@@ -145,6 +145,26 @@ async function connect(addr, user, pass) {
     }
   }
   return { ok: false, error: 'ONVIF recusou o login. Informe usuário/senha do app iCSee.' };
+}
+
+// Troca a senha da própria câmera (DVRIP ModifyPassword, msg 1488) e reconecta com ela. Sem senha, qualquer um na
+// rede entra na câmera e lê até a senha do Wi-Fi (NetWork.Wifi). O app iCSee e as TVs que falam direto com a
+// câmera pedem a senha nova; as TVs pelo camera-ai não percebem nada.
+async function setCameraPassword(password) {
+  password = String(password ?? '');
+  if (password.length < 6 || password.length > 15) return { ok: false, error: 'a senha da câmera precisa ter de 6 a 15 caracteres' };
+  const old = cam.pass, addr = cam.addr, user = cam.user;
+  const change = async (from, to) => {
+    const r = await (await dvrSession()).request(1488, { EncryptType: 'MD5', UserName: user, PassWord: xmHash(from), NewPassWord: xmHash(to) });
+    if (Number(r.Ret) !== 100) throw new Error('a câmera recusou (' + (r.Ret ?? 'sem código') + ')');
+  };
+  try { await change(old, password); } catch (e) { return { ok: false, error: e.message }; }
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Senha da câmera trocada; reconectando`);
+  const r = await connect(addr, user, password);
+  if (r.ok && cam.pass === password) { live?.restart(); return { ok: true }; }
+  // Não entrou com a nova: volta a antiga, para não perder a câmera
+  try { await change(password, old); await connect(addr, user, old); } catch {}
+  return { ok: false, error: 'a câmera trocou a senha mas não aceitou a nova pelo ONVIF; a antiga foi posta de volta' };
 }
 
 const unesc = (s) => s ? s.replace(/&amp;/g, '&').trim() : s;
@@ -250,6 +270,13 @@ async function ptz(dir, action, step = 5) {
       if (cam.ptzDir) await dvrPtz(cam.ptzDir, -1).catch(() => {});
       cam.ptzDir = null;
       return dvrPtz('GotoPreset', 1);
+    }
+    // Onde a lente móvel está agora vira o preset 1: para onde ela volta quando não tem ninguém
+    if (dir === 'sethome') {
+      if (cam.ptzDir) await dvrPtz(cam.ptzDir, -1).catch(() => {});
+      cam.ptzDir = null;
+      console.log(`${new Date().toLocaleTimeString('pt-BR')} Preset 1 salvo onde a lente móvel está agora`);
+      return dvrPtz('SetPreset', 1);
     }
     if (action === 'stop') {
       const command = cam.ptzDir;
@@ -431,14 +458,13 @@ function updateFollow(result) {
   if (!follow.enabled || !cam.dvr) return;
   const people = (result.items || []).filter(it => it.kind === 'person' && it.score >= 0.4);
   const bottom = people.filter(it => it.box[1] + it.box[3] / 2 >= 0.5).sort((a, b) => b.score - a.score)[0];
-  const top = people.filter(it => it.box[1] + it.box[3] / 2 < 0.5).sort((a, b) => b.score - a.score)[0];
   const now = Date.now();
 
   // A detecção na metade inferior vem da lente que gira: use-a como feedback fechado. A lente fixa pode
   // ver a pessoa deslocada mesmo quando a móvel já está apontada corretamente.
   if (bottom) {
     follow.hitFrames++;
-    follow.lostAt = 0; follow.returned = false; follow.searchPulses = 0;
+    follow.lostAt = 0; follow.returned = false;
     const centerX = bottom.box[0] + bottom.box[2] / 2;
     const centerY = (bottom.box[1] + bottom.box[3] / 2 - 0.5) * 2;
     const dir = centerX < 0.38 ? 'left' : centerX > 0.62 ? 'right'
@@ -450,16 +476,9 @@ function updateFollow(result) {
 
   follow.hitFrames = 0;
   if (!follow.lostAt) follow.lostAt = now;
-  // If the moving lens lost the person but the fixed lens still sees them, search with at most three
-  // short, spaced pulses. Do not keep driving toward a stale coordinate.
-  if (top && follow.searchPulses < 3 && now - follow.lostAt >= 2500 && now - follow.lastMove >= 2200) {
-    const centerX = top.box[0] + top.box[2] / 2;
-    const dir = centerX < 0.38 ? 'left' : centerX > 0.62 ? 'right' : null;
-    if (dir) {
-      follow.searchPulses++;
-      followPulse(dir, `procurando pela lente fixa x=${centerX.toFixed(2)}`);
-    }
-  }
+  // Só a lente móvel guia o motor. Procurar pela lente fixa não funciona: onde a pessoa está na fixa não diz para
+  // onde virar a móvel (depende de onde o motor está), e os pulsos tiravam a móvel da vista do quarto (medido,
+  // 25/10). Sem pessoa na móvel, ela volta ao preset 1, que vê o quarto todo, e espera alguém aparecer ali.
   if (!follow.returned && now - follow.lostAt >= 12000 && now - follow.lastMove >= 1000) {
     follow.returned = true; follow.lastMove = now;
     console.log(`${new Date().toLocaleTimeString('pt-BR')} Seguir: 12 s sem pessoa, voltando ao preset 1`);
@@ -481,7 +500,7 @@ function resumeFollow() {
 function setFollow(enabled) {
   if (follow.wanted !== !!enabled) { follow.wanted = !!enabled; saveState(); }   // lembrado: volta ligado se o camera-ai reiniciar
   follow.enabled = !!enabled && !!cam.dvr && !!ai.model && !!live;
-  follow.lastMove = 0; follow.lostAt = 0; follow.returned = false; follow.searchPulses = 0; follow.hitFrames = 0;
+  follow.lastMove = 0; follow.lostAt = 0; follow.returned = false; follow.hitFrames = 0;
   clearTimeout(follow.timer); follow.timer = null;
   if (!follow.enabled && cam.ptzDir) ptz('left', 'stop').catch(() => {});
   if (follow.enabled) startAi(); else stopAiSoon();
@@ -825,7 +844,7 @@ function startDiscovery() {
   const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   sock.on('message', (msg, from) => {
     if (msg.toString().trim() !== 'camera-ai?') return;
-    const reply = JSON.stringify({ hub: 'camera-ai', version: SCREEN_VERSION, port: PORT,
+    const reply = JSON.stringify({ hub: 'camera-ai', version: SCREEN_VERSION, port: PORT, auth: true,
       serial: cam.info.serial || null, hosts: cam.addr ? [cam.addr] : [] });
     sock.send(reply, from.port, from.address);
   });
@@ -836,9 +855,70 @@ function startDiscovery() {
 // Conecta sozinho na câmera ao ligar: CAMERA=ip, ou a última que conectou (server/state.json), ou o
 // endereço do perfil. Assim as telas acham a câmera pronta, sem abrir a interface no navegador antes.
 const STATE_FILE = path.join(HERE, 'state.json');
-function saveState() {
-  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, clips: clipsOn.wanted, video: videoPick.choice })); } catch {}
+
+// ---------- Senha ----------
+// Quem não está no próprio PC precisa da senha do camera-ai uma vez: o navegador guarda um cookie, a TV guarda a
+// chave e a põe no começo do endereço (/k/<chave>/api/...). Trocar a senha troca a chave e desconecta todos.
+// Fica em state.json só o hash (scrypt) da senha e a chave.
+const access = (() => {
+  try { const a = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')).access; if (a?.hash && a?.key) return a; } catch {}
+  return null;
+})() || newAccess(String(crypto.randomInt(0, 1e8)).padStart(8, '0'), true);
+function newAccess(password, announce) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const a = { salt, hash: crypto.scryptSync(password, salt, 32).toString('hex'), key: crypto.randomBytes(24).toString('hex') };
+  if (announce) console.log(`Senha do camera-ai: ${password}   (para entrar pelo celular e pela TV; troque no menu ☰ → Senha)`);
+  return a;
 }
+const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const passwordOk = (password) => same(crypto.scryptSync(String(password ?? ''), access.salt, 32).toString('hex'), access.hash);
+function setPassword(password) {
+  password = String(password ?? '');
+  if (password.length < 4) return { ok: false, error: 'a senha precisa de pelo menos 4 caracteres' };
+  Object.assign(access, newAccess(password, false));
+  saveState();
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Senha do camera-ai trocada: todos os aparelhos entram de novo`);
+  return { ok: true, key: access.key };
+}
+const isLoopback = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+// O próprio PC entra sem senha, mas não uma página de outro site aberta nele (ela mandaria Origin de fora)
+function fromThisPc(req) {
+  if (!isLoopback(req)) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try { return ['127.0.0.1', 'localhost'].includes(new URL(origin).hostname); } catch { return false; }
+}
+const cookieKey = (req) => /(?:^|;\s*)camkey=([0-9a-f]+)/.exec(req.headers.cookie || '')?.[1];
+// Errou a senha 5 vezes: aquele aparelho espera 1 minuto
+const tries = new Map();
+function login(req, res, password) {
+  const ip = req.socket.remoteAddress, t = tries.get(ip) || { n: 0, until: 0 };
+  if (Date.now() < t.until) return json(res, 429, { ok: false, error: 'muitas tentativas; espere 1 minuto' });
+  if (!passwordOk(password)) {
+    t.n++; if (t.n >= 5) { t.n = 0; t.until = Date.now() + 60000; }
+    tries.set(ip, t);
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Senha errada de ${ip}`);
+    return json(res, 401, { ok: false, error: 'senha errada' });
+  }
+  tries.delete(ip);
+  res.setHeader('set-cookie', `camkey=${access.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
+  return json(res, 200, { ok: true, key: access.key });
+}
+const LOGIN_PAGE = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>camera-ai</title><style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d0f12;color:#e8eaed;font:16px system-ui,sans-serif}
+form{display:grid;gap:12px;width:min(320px,calc(100vw - 32px))}h1{font-size:20px;margin:0 0 4px}
+input,button{font:inherit;padding:12px;border-radius:10px;border:1px solid #333;background:#16191d;color:inherit}
+button{background:#2f6fed;border-color:#2f6fed;font-weight:600}p{margin:0;color:#ff8a80;min-height:1.2em}</style></head>
+<body><form id="f"><h1>camera-ai</h1><input id="p" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Senha" autofocus>
+<button>Entrar</button><p id="e"></p></form><script>
+f.onsubmit=async ev=>{ev.preventDefault();const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:p.value})});
+const d=await r.json().catch(()=>({}));if(d.ok)location.reload();else e.textContent=d.error||'não deu';};</script></body></html>`;
+
+function saveState() {
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, clips: clipsOn.wanted, video: videoPick.choice, access })); } catch {}
+}
+setImmediate(saveState);   // a senha nova (primeira vez) fica guardada já, depois que tudo acima e abaixo existe
 
 // ---------- Dia/noite por horário ----------
 // No automático a câmera decide pela luz e fica trocando no fim de tarde (e a luz branca acende e
@@ -941,6 +1021,20 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
   try {
+    // A TV põe a chave no começo do endereço: /k/<chave>/api/...
+    const prefixed = /^\/k\/([0-9a-f]+)(\/.*)$/.exec(u.pathname);
+    if (prefixed) u.pathname = prefixed[2];
+    if (u.pathname === '/api/login' && req.method === 'POST') return login(req, res, (await readBody(req)).password);
+    if (!fromThisPc(req) && !same(prefixed?.[1], access.key) && !same(cookieKey(req), access.key) && !same(req.headers['x-key'], access.key)) {
+      if (u.pathname.startsWith('/api/')) return json(res, 401, { error: 'senha', login: '/api/login' });
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end(LOGIN_PAGE);
+    }
+    if (u.pathname === '/api/password' && req.method === 'POST') {
+      const r = setPassword((await readBody(req)).password);
+      if (r.ok) res.setHeader('set-cookie', `camkey=${access.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
+      return json(res, 200, r);
+    }
     if (u.pathname.startsWith('/api/events/') && req.method === 'GET') return serveClip(req, res, decodeURIComponent(u.pathname.slice(12)));
     switch (u.pathname) {
       case '/api/events': {
@@ -950,6 +1044,7 @@ const server = http.createServer(async (req, res) => {
         if (b.delete) return json(res, 200, { ok: !!clips?.remove(String(b.delete)) });
         return json(res, 200, setClips(b.enabled));
       }
+      case '/api/camera-password': { const b = await readBody(req); return json(res, 200, await setCameraPassword(b.password)); }
       case '/api/connect': { const b = await readBody(req); return json(res, 200, await connect(b.addr, b.user, b.pass)); }
       case '/api/state':   return json(res, 200, publicState());
       case '/api/stream':  if (!HAS_FFMPEG) return json(res, 501, { error: 'sem ffmpeg; use snapshot' }); return startStream(res, u.searchParams.get('stream') || 'sub');
@@ -990,7 +1085,8 @@ function serveStatic(pathname, res) {
   let rel = decodeURIComponent(pathname);
   if (rel === '/' || rel === '') rel = '/index.html';
   const file = path.normalize(path.join(UI_ROOT, rel));
-  if (!file.startsWith(UI_ROOT)) return json(res, 403, { error: 'fora da pasta' });     // anti path traversal
+  // Só a página e assets/: o resto da pasta tem server/state.json (senhas) e os clipes
+  if (file !== path.join(UI_ROOT, 'index.html') && !file.startsWith(path.join(UI_ROOT, 'assets') + path.sep)) return json(res, 404, { error: 'não encontrado' });
   fs.readFile(file, (e, data) => {
     if (e) return json(res, 404, { error: 'não encontrado' });
     res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', ...cors });
@@ -1000,7 +1096,8 @@ function serveStatic(pathname, res) {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`cam-control no PC:     http://127.0.0.1:${PORT}`);
-  console.log(`cam-control no celular: http://192.168.0.33:${PORT}   (mesma rede Wi-Fi)`);
+  const lan = Object.values(os.networkInterfaces()).flat().filter(i => i?.family === 'IPv4' && !i.internal && /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(i.address)).map(i => i.address);
+  console.log(`cam-control no celular: ${lan.map(ip => `http://${ip}:${PORT}`).join('  ') || '(sem rede)'}   (mesma rede Wi-Fi, com a senha)`);
   console.log(`ffmpeg: ${HAS_FFMPEG ? 'sim' : 'não'} · H.264 para as telas: ${H264 ? H264.name : 'não'}`);
   startDiscovery();
   autoConnect();
