@@ -837,22 +837,27 @@ const ACT_FILE = path.join(ACT_DIR, 'atividades.json');
 let activity = (() => { try { return JSON.parse(fs.readFileSync(ACT_FILE, 'utf8')); } catch { return []; } })();
 // Movimentos seguidos (menos de 3 min entre um e outro) viram um evento só, com até quando e quantas vezes
 const GROUPED = new Set(['motion']);
-async function logActivity(type, text, { thumb = false, box = null, label = null } = {}) {
+async function logActivity(type, text, { thumb = false, box = null, label = null, people } = {}) {
   if (privacy.on && type !== 'privacy') return;   // modo privacidade: a câmera não olha, nada vira atividade
   const now = Date.now(), last = activity.at(-1);
   if (GROUPED.has(type) && last?.type === type && now - (last.until || last.at) < 180000) {
     last.until = now; last.count = (last.count || 1) + 1;
+    if (now - presence.person.lastSeen < 60000 && !last.withPerson) { last.withPerson = true; last.text = 'Movimento com pessoa'; }
     try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
     return broadcast({ type: 'activity', update: true, item: last });
   }
   const entry = { at: now, type, text, camera: perfil?.data.name || 'Câmera' };
   if (box) entry.box = box;
   if (label) entry.label = label;
+  if (people) entry.people = people;
+  // Movimento: diz se a IA via alguém junto (a câmera avisa de qualquer coisa que se mexe: cortina, luz da TV)
+  if (type === 'motion' && now - presence.person.lastSeen < 60000) { entry.withPerson = true; entry.text = 'Movimento com pessoa'; }
   if (type === 'person' || type === 'animal') entry.alert = protection.on;   // com a Proteção ligada, avisa no celular
   if (thumb) entry.thumb = await activityThumb(type === 'person' || type === 'animal');
   activity = [...activity, entry].slice(-500);
   try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
   broadcast({ type: 'activity', item: entry });   // a atividade vai em item: ela tem o próprio type (person, motion…)
+  return entry;
 }
 let lastAiFrame = null;
 async function activityThumb(fromAi = false) {
@@ -889,24 +894,61 @@ setInterval(() => {
   for (const f of fs.readdirSync(ACT_DIR)) if (/^\d+\.jpg$/.test(f) && +f.slice(0, -4) < old) fs.rm(path.join(ACT_DIR, f), () => {});
   activity = activity.filter(a => a.at > Date.now() - 30 * 864e5);
 }, 3600e3).unref();
-// Pessoa ou animal chegando: a IA vê depois de 2 min sem ninguém daquele tipo (quem fica parado não vira uma
-// atividade atrás da outra). Leva onde estava (o quadrado) e o que era ("Gato").
-const presence = { person: { lastSeen: 0, hits: 0 }, animal: { lastSeen: 0, hits: 0 } };
+// Pessoa ou animal: uma VISITA, não uma aparição. Enquanto continua por perto (até 10 min sem ser visto) é o mesmo
+// evento, que vai até a última vez visto e guarda quantas pessoas apareceram juntas. Antes, quem ficava parado atrás
+// do monitor sumia da IA por uns minutos e voltava como "chegada" nova: 9 "pessoas" num quarto de 2 (25/10).
+// Só conta o que a IA viu na maioria das últimas análises (~1 s), não uma imagem solta.
+const VISIT_GAP = 10 * 60e3;
+const presence = { person: { recent: [], lastSeen: 0, visit: null, savedAt: 0 }, animal: { recent: [], lastSeen: 0, visit: null, savedAt: 0 } };
+const RULES = {
+  person: { min: 0.6, of10: 6 },
+  // Animal pede muito mais: um cobertor e uma sombra viraram "Cachorro" com nota 0,5–0,7 (25/10)
+  animal: { min: 0.8, of10: 8, minArea: 0.004 },
+};
 function arrivals(r) {
   const now = Date.now(), where = perfil?.data.name || 'Câmera';
   for (const kind of ['person', 'animal']) {
-    const p = presence[kind];
-    // Animal pede mais certeza: um cobertor perto da câmera virou "Cachorro" com nota de 0,5 (medido em 25/10)
-    const min = kind === 'person' ? 0.5 : 0.65, hits = kind === 'person' ? 3 : 4;
-    const best = (r.items || []).filter(it => it.kind === kind && it.score >= min && !it.uncertain).sort((a, b) => b.score - a.score)[0];
-    if (!best) { p.hits = 0; continue; }
-    if (++p.hits < hits) continue;
-    if (now - p.lastSeen > 120000) {
-      const name = kind === 'person' ? 'Pessoa' : best.label?.pt || 'Animal';
-      logActivity(kind, `${name} no ${where}`, { thumb: true, box: best.box, label: name });
+    if (kind === 'animal' && perfil?.data.pets === false) continue;   // "não tem animais em casa"
+    const p = presence[kind], rule = RULES[kind];
+    const found = (r.items || []).filter(it => it.kind === kind && it.score >= rule.min && !it.uncertain
+      && (!rule.minArea || it.box[2] * it.box[3] >= rule.minArea)).sort((a, b) => b.score - a.score);
+    p.recent.push(found.length > 0);
+    if (p.recent.length > 10) p.recent.shift();
+    if (!found.length || p.recent.filter(Boolean).length < rule.of10) continue;
+    // Quantas ao mesmo tempo: a lente de cima vê o quarto todo e a de baixo uma parte; vale a que vê mais
+    const half = (it) => it.box[1] + it.box[3] / 2 < 0.5;
+    const count = PROFILE.lenses?.layout === 'stacked-vertical'
+      ? Math.max(found.filter(half).length, found.filter(it => !half(it)).length) : found.length;
+    const name = kind === 'person' ? (count > 1 ? `${count} pessoas` : 'Pessoa') : found[0].label?.pt || 'Animal';
+    const v = p.visit;
+    if (v && !v.pending && now - p.lastSeen < VISIT_GAP) {
+      v.until = now;
+      if (count > (v.people || 1)) { v.people = count; v.text = `${name} no ${where}`; p.savedAt = 0; }
+      // Guarda e avisa as telas no máximo a cada 30 s (a visita pode durar horas)
+      if (now - p.savedAt > 30000) {
+        p.savedAt = now;
+        try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
+        broadcast({ type: 'activity', update: true, item: v });
+      }
+    } else if (!v?.pending || now - p.lastSeen >= VISIT_GAP) {
+      p.visit = { pending: true };
+      logActivity(kind, `${name} no ${where}`, { thumb: true, box: found[0].box, label: name, people: kind === 'person' ? count : undefined })
+        .then(entry => { p.visit = entry || null; p.savedAt = Date.now(); });
     }
     p.lastSeen = now;
   }
+}
+// "Foi engano": a atividade sai da lista; fica anotado no perfil (o que era e com que nota) para ajustar a IA
+function forgetActivity(at, type) {
+  const i = activity.findIndex(a => a.at === +at && a.type === String(type));
+  if (i < 0) return { ok: false, error: 'atividade não encontrada' };
+  const [a] = activity.splice(i, 1);
+  for (const k of ['person', 'animal']) if (presence[k].visit === a) presence[k].visit = null;
+  try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
+  if (a.thumb) fs.rm(path.join(ACT_DIR, a.thumb), () => {});
+  perfil?.event('engano', `Engano marcado: ${a.text}`, { kind: a.type, label: a.label, box: a.box });
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Atividade marcada como engano: ${a.text}`);
+  return { ok: true };
 }
 // Zonas para ignorar (desenhadas no app): o que a IA vê com o centro dentro delas não conta (a TV, o ventilador)
 function ignoreZones(r) {
@@ -1177,7 +1219,7 @@ const CAP_INFO = {
 function perfilInfo() {
   if (!perfil) return { ok: false, error: 'sem câmera' };
   const p = perfil.data;
-  return { ok: true, name: p.name || 'Câmera', zones: p.zones || [], kind: PROFILE.name || null, serial: p.serial, model: p.model, firmware: p.firmware, firstSeen: p.firstSeen, running: fullVistoria.running,
+  return { ok: true, name: p.name || 'Câmera', zones: p.zones || [], pets: p.pets !== false, kind: PROFILE.name || null, serial: p.serial, model: p.model, firmware: p.firmware, firstSeen: p.firstSeen, running: fullVistoria.running,
     caps: Object.entries(CAP_LABELS).filter(([id]) => p.caps[id]).map(([id, label]) => ({ id, label, ...CAP_INFO[id], ...p.caps[id] })),
     history: p.history.slice(-50).reverse() };
 }
@@ -1559,6 +1601,7 @@ const server = http.createServer(async (req, res) => {
         if (req.method === 'POST') {
           const b = await readBody(req);
           if (perfil && b.name) perfil.data.name = String(b.name).slice(0, 40);
+          if (perfil && typeof b.pets === 'boolean') perfil.data.pets = b.pets;
           // Zonas para ignorar: retângulos [x, y, l, a] de 0 a 1 na imagem inteira
           if (perfil && Array.isArray(b.zones)) perfil.data.zones = b.zones.slice(0, 8)
             .map(z => z.slice(0, 4).map(n => Math.max(0, Math.min(1, +n || 0)))).filter(z => z[2] > 0.01 && z[3] > 0.01);
@@ -1567,6 +1610,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, perfilInfo());
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
+      case '/api/activity/forget': { const b = await readBody(req); return json(res, 200, forgetActivity(b.at, b.type)); }
       case '/api/screen/thumb': return serveCameraThumb(res);
       case '/api/protection': {
         if (req.method === 'POST') {

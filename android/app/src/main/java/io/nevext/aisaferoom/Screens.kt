@@ -552,20 +552,39 @@ fun ActivityScreen(live: Live, onLive: () -> Unit) {
         }
         item { Spacer(Modifier.height(20.dp)) }
     }
-    opened?.let { a -> ActivityDetail(hub, a, onClose = { opened = null }, onLive = { opened = null; onLive() }) }
+    val scope = rememberCoroutineScope()
+    opened?.let { a ->
+        ActivityDetail(hub, a, onClose = { opened = null }, onLive = { opened = null; onLive() }, onMistake = {
+            opened = null
+            scope.launch {
+                withContext(Dispatchers.IO) { runCatching { hub.forget(a.optLong("at"), a.optString("type")) } }.onSuccess {
+                    live.activity = org.json.JSONArray().also { list ->
+                        for (i in 0 until live.activity.length()) live.activity.optJSONObject(i)
+                            ?.takeUnless { it.optLong("at") == a.optLong("at") && it.optString("type") == a.optString("type") }?.let(list::put)
+                    }
+                }
+            }
+        })
+    }
 }
 
 /** Today in one line and a strip of the day (0h to 24h) with a dot where something happened. */
 @Composable
 private fun DaySummary(today: List<JSONObject>) {
-    val people = today.count { it.optString("type") == "person" }
+    // Pessoas: quantas apareceram juntas no máximo (a IA não sabe quem é quem, mas sabe contar quantas vê ao mesmo tempo)
+    val visits = today.filter { it.optString("type") == "person" }
+    val people = visits.maxOfOrNull { it.optInt("people", 1) } ?: 0
     val animals = today.count { it.optString("type") == "animal" }
     val moves = today.filter { it.optString("type") == "motion" }.sumOf { it.optInt("count", 1) }
     Column(Modifier.fillMaxWidth().card(palette).padding(16.dp)) {
         Text("Hoje", fontSize = 12.sp, color = palette.muted)
-        Text(listOf("$people ${if (people == 1) "pessoa" else "pessoas"}", "$animals ${if (animals == 1) "animal" else "animais"}",
+        Text(listOfNotNull(
+            if (people == 0) "Ninguém" else "$people ${if (people == 1) "pessoa" else "pessoas"}",
+            animals.takeIf { it > 0 }?.let { "$it ${if (it == 1) "animal" else "animais"}" },
             "$moves ${if (moves == 1) "movimento" else "movimentos"}").joinToString(" · "), fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
             modifier = Modifier.padding(top = 2.dp))
+        if (people > 0) Text("${visits.size} ${if (visits.size == 1) "visita" else "visitas"} · no máximo $people ao mesmo tempo",
+            fontSize = 12.sp, color = palette.muted)
         val start = dayOf(System.currentTimeMillis()).timeInMillis
         val line = palette.line
         Canvas(Modifier.fillMaxWidth().height(26.dp).padding(top = 10.dp)) {
@@ -606,9 +625,14 @@ private fun look(type: String): Look = when (type) {
 
 /** "Movimento detectado · 5 vezes até 14:45" for grouped movements. */
 private fun detailLine(a: JSONObject): String {
-    val base = "${clock.format(Date(a.optLong("at")))} · ${a.optString("camera")}"
+    val at = clock.format(Date(a.optLong("at")))
+    val until = if (a.has("until")) clock.format(Date(a.optLong("until"))) else null
     val count = a.optInt("count", 1)
-    return if (count > 1 && a.has("until")) "$base · $count vezes até ${clock.format(Date(a.optLong("until")))}" else base
+    return when {
+        a.optString("type") == "motion" && count > 1 && until != null -> "$at · ${a.optString("camera")} · $count vezes até $until"
+        until != null && until != at -> "$at–$until · ${a.optString("camera")}"   // uma visita: de quando chegou até a última vez vista
+        else -> "$at · ${a.optString("camera")}"
+    }
 }
 
 @Composable
@@ -635,7 +659,7 @@ private fun ActivityRow(hub: Hub, a: JSONObject, isNew: Boolean, onOpen: () -> U
 
 /** The activity big: its picture with where the person was, when, and a way to see the camera now. */
 @Composable
-private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive: () -> Unit) {
+private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive: () -> Unit, onMistake: () -> Unit) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
         Column(Modifier.fillMaxWidth().card(palette, 20.dp).padding(14.dp)) {
             a.optString("thumb").takeIf { it.isNotEmpty() && it != "null" }?.let { name ->
@@ -652,14 +676,15 @@ private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive:
                 }
             }
             Text(a.optString("text"), fontWeight = FontWeight.SemiBold, fontSize = 17.sp, modifier = Modifier.padding(top = 12.dp))
-            Text("${whenText(a.optLong("at"))} · ${a.optString("camera")}" +
-                (a.optInt("count", 1).takeIf { it > 1 }?.let { " · $it vezes até ${clock.format(Date(a.optLong("until")))}" } ?: ""),
-                color = palette.muted, fontSize = 13.sp)
+            Text("${dayTitle(a.optLong("at"))} · ${detailLine(a)}", color = palette.muted, fontSize = 13.sp)
             if (a.optBoolean("alert")) Text("Proteção estava ativada: o celular avisou.", color = palette.muted, fontSize = 12.sp,
                 modifier = Modifier.padding(top = 4.dp))
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.End) {
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                // A IA errou (um cobertor virou "Cachorro"): sai da lista e fica anotado para ajustar
+                if (a.optString("type") in setOf("person", "animal", "motion")) TextButton(onClick = onMistake) { Text("Foi engano", color = Red) }
+                Spacer(Modifier.weight(1f))
                 TextButton(onClick = onClose) { Text("Fechar", color = palette.muted) }
-                Button(onClick = onLive, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Ver ao vivo agora") }
+                Button(onClick = onLive, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Ao vivo") }
             }
         }
     }
@@ -838,6 +863,19 @@ fun FeaturesScreen(live: Live, onBack: () -> Unit, onZones: () -> Unit) {
                     Text("Marque a TV, o ventilador… o que se mexe ali não conta", color = palette.muted, fontSize = 12.sp)
                 }
                 Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = palette.muted)
+            }
+            // Sem animais em casa, a IA ignora animais (evita "Cachorro" que era um cobertor)
+            var pets by remember(profile) { mutableStateOf(profile?.optBoolean("pets", true) ?: true) }
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp).card(palette).clickable {
+                pets = !pets; scope.launch { withContext(Dispatchers.IO) { runCatching { hub.setPets(pets) } } }
+            }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconBubble(Icons.Outlined.Pets, size = 36)
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text("Tem animais em casa", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(if (pets) "A IA avisa de animais também" else "A IA ignora animais", color = palette.muted, fontSize = 12.sp)
+                }
+                Switch(pets, onCheckedChange = { pets = it; scope.launch { withContext(Dispatchers.IO) { runCatching { hub.setPets(it) } } } },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Blue))
             }
             PageTitle("O que a câmera faz", "${caps.count { it.optString("status") == "ok" }} recursos conferidos")
             Button(enabled = !checking, onClick = {

@@ -63,6 +63,15 @@ class Hub(val root: String, val key: String?) {
     fun setZones(zones: List<FloatArray>): JSONObject =
         json("$base/api/perfil", JSONObject().put("zones", JSONArray(zones.map { z -> JSONArray(z.map { it.toDouble() }) })).toString())
 
+    /** "Foi engano": the activity leaves the list (camera-ai notes it to tune the AI). */
+    fun forget(at: Long, type: String) {
+        val reply = json("$base/api/activity/forget", JSONObject().put("at", at).put("type", type).toString())
+        if (!reply.optBoolean("ok")) throw IOException(reply.optString("error", "não deu"))
+    }
+
+    /** Whether there are animals in the house: if not, the AI ignores animals. */
+    fun setPets(on: Boolean): JSONObject = json("$base/api/perfil", JSONObject().put("pets", on).toString())
+
     /** Protection (away mode): on, and its schedule. */
     fun setProtection(on: Boolean): JSONObject = json("$base/api/protection", JSONObject().put("on", on).toString())
     fun setProtectionSchedule(enabled: Boolean, on: String, off: String): JSONObject = json("$base/api/protection",
