@@ -90,6 +90,7 @@
       <button type="button" class="menu-row" id="miAutoZoom"><span>🔍</span> <span class="mr-label">Zoom que acompanha</span><span class="mr-state" id="zoomState">desligado</span></button>
       <button type="button" class="menu-row" id="miFollow"><span>↗</span> <span class="mr-label">Seguir pessoa</span><span class="mr-state">desligado</span></button>
       <button type="button" class="menu-row" id="miEvents"><span>🎞</span> <span class="mr-label">Eventos (clipes)</span><span class="mr-state" id="evState">…</span></button>
+      <button type="button" class="menu-row" id="miCaps"><span>✨</span> <span class="mr-label">O que a câmera faz</span><span class="mr-state" id="capsState">…</span></button>
       <button type="button" class="menu-row" id="miVistoria"><span>📶</span> <span class="mr-label">Teste da câmera</span><span class="mr-state" id="vState">…</span></button>
       <button type="button" class="menu-row" id="miPassword"><span>🔒</span> <span class="mr-label">Senha</span><span class="mr-state">trocar</span></button>
       <button type="button" class="menu-row" id="miCamPassword"><span>📷</span> <span class="mr-label">Senha da câmera</span><span class="mr-state">trocar</span></button>
@@ -131,6 +132,17 @@
       <video id="evVideo" class="ev-video" controls playsinline hidden></video>
       <div class="ev-list" id="evList"></div>
       <menu><button value="cancel" class="ghost">Fechar</button><button type="button" id="evTest" class="primary">Gravar um teste</button></menu>
+    </form>
+  </dialog>
+
+  <!-- O que a câmera faz: o perfil dela em palavras simples (GET /api/perfil) -->
+  <dialog id="caps" class="sheet">
+    <form method="dialog">
+      <div class="grabber"></div>
+      <h2>O que a câmera faz</h2>
+      <p class="v-sub" id="capsSub"></p>
+      <div class="caps-list" id="capsList"></div>
+      <menu><button value="cancel" class="ghost">Fechar</button><button type="button" id="capsFull" class="primary">Conferir o que falta</button></menu>
     </form>
   </dialog>
 

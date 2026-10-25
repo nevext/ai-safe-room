@@ -262,6 +262,33 @@ $('#vRun')?.addEventListener('click', async function(){
   this.disabled = false; refreshVistoria();
 });
 
+// --- O que a câmera faz (perfil): cada recurso em palavras simples, se funciona e onde usar ---
+const capsDlg = $('#caps');
+const CAP_STATE = { ok: ['Funciona', 'ok'], no: ['Não tem', 'no'], declared: ['A câmera diz que tem', 'maybe'],
+  unverified: ['Ainda não deu para conferir', 'maybe'], model: ['Outra câmera igual tem', 'maybe'] };
+function showCaps(){
+  api('/api/perfil').then(p => {
+    if (!p.ok) return;
+    const caps = p.caps || [], works = caps.filter(c => c.status === 'ok').length;
+    $('#capsState').textContent = works + ' de ' + caps.filter(c => c.status !== 'no').length;
+    $('#capsSub').textContent = `${p.model || 'Câmera'} · ${works} recursos conferidos. “Conferir o que falta” testa o resto (a luz pode acender e a lente girar).`;
+    $('#capsList').innerHTML = caps.filter(c => c.status !== 'no').concat(caps.filter(c => c.status === 'no')).map(c => {
+      const [label, kind] = CAP_STATE[c.status] || [c.status, 'maybe'];
+      return `<div class="cap ${kind}"><div class="cap-top"><b>${c.label.pt}</b><span class="cap-chip">${label}</span></div>`
+        + `<p>${c.desc || ''}</p><p class="cap-use">${c.use ? 'Onde usar: ' + c.use : 'Ainda não dá para usar no camera-ai.'}</p></div>`;
+    }).join('');
+  }).catch(() => {});
+}
+showCaps();
+$('#miCaps')?.addEventListener('click', () => { menuDlg.close(); showCaps(); capsDlg.showModal(); });
+$('#capsFull')?.addEventListener('click', async function(){
+  if (!confirm('Para conferir, a câmera pode acender a luz branca e girar a lente por alguns segundos. Continuar?')) return;
+  this.disabled = true; $('#capsSub').textContent = 'Conferindo (uns 40 s)…';
+  try { const r = await api('/api/perfil/vistoria', { method:'POST' }); toast(r.ok ? (r.results.length ? `Pronto: ${r.results.filter(x => x.status === 'ok').length} de ${r.results.length} conferidos.` : 'Nada novo para conferir.') : r.error); }
+  catch (e){ toast('Não deu: ' + e.message); }
+  this.disabled = false; showCaps();
+});
+
 // --- Eventos: os clipes de quando aparece alguém (GET/POST /api/events) ---
 const evDlg = $('#events');
 const when = t => new Date(t).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });

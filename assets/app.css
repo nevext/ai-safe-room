@@ -163,3 +163,13 @@ menu button{flex:1;border:0;border-radius:14px;padding:14px;font-size:16px;font-
 .v-history li { padding: 4px 0; border-bottom: 1px solid rgba(127,127,127,.15); }
 .v-history time { font-family: 'Geist Mono', monospace; opacity: .7; margin-right: 6px; }
 .v-checks small { opacity: .7; }
+
+/* O que a câmera faz */
+.caps-list { display: grid; gap: 10px; margin: 12px 0; }
+.cap { border: 1px solid rgba(127,127,127,.25); border-radius: 12px; padding: 12px; }
+.cap.no { opacity: .55; }
+.cap-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.cap-chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; background: rgba(127,127,127,.18); }
+.cap.ok .cap-chip { background: rgba(34,197,94,.18); color: #22c55e; }
+.cap p { margin: 6px 0 0; font-size: 14px; line-height: 1.4; }
+.cap-use { opacity: .75; font-size: 13px !important; }

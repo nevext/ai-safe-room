@@ -720,6 +720,7 @@ setInterval(() => {
   const now = quality.level.push(g);
   quality.last = { at: Date.now(), stream: videoPick.using, ...s, ...g };
   quality.bursts = [...quality.bursts, s.burstMs].slice(-30);
+  if (s.fps > 0 && perfil && perfil.status('video') !== 'ok') { perfil.verify('video', 'ok', 'as imagens chegam'); perfil.save(); }
   if (before !== null && now !== before) {
     console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria: ${LEVELS[before].pt} → ${LEVELS[now].pt} (${g.reasons.join('; ') || 'estável'})`);
     perfil?.event('nivel', `${LEVELS[before].pt} → ${LEVELS[now].pt}`, { level: now, reasons: g.reasons });
@@ -925,15 +926,17 @@ async function runFullVistoria() {
       } else if (perfil.status('night') !== 'ok') note('night', 'unverified', 'a imagem está colorida (claro): conferir com o ambiente escuro');
     }
     // Motor: um pulso para o lado, a imagem da lente que gira tem que mudar; depois volta ao preset 1
-    if (todo('motor') && cam.dvr) {
-      const part = PROFILE.lenses?.layout === 'stacked-vertical' ? 'bottom' : 'whole';
-      const a = await imageStats(part);
+    if ((todo('motor') || (todo('twoLenses') && perfil.has('motor'))) && cam.dvr) {
+      const stacked = PROFILE.lenses?.layout === 'stacked-vertical';
+      const a = await imageStats(stacked ? 'bottom' : 'whole'), aTop = stacked ? await imageStats('top') : null;
       await ptz('right', 'start', 3); await wait(600); await ptz('right', 'stop', 3); await wait(2000);
-      const b = await imageStats(part);
+      const b = await imageStats(stacked ? 'bottom' : 'whole'), bTop = stacked ? await imageStats('top') : null;
       await ptz('home', 'start').catch(() => {});
       const d = diff(a.gray, b.gray);
-      if (d >= 10) note('motor', 'ok', `girou, a imagem mudou ${Math.round(d)}`);
+      if (d >= 10) { if (todo('motor')) note('motor', 'ok', `girou, a imagem mudou ${Math.round(d)}`); }
       else note('motor', 'no', `mandou girar e a imagem não mudou (${Math.round(d)})`);
+      // Duas lentes: a de baixo mudou e a de cima ficou parada
+      if (stacked && d >= 10 && todo('twoLenses') && diff(aTop.gray, bTop.gray) < d / 3) note('twoLenses', 'ok', 'a lente de baixo girou e a de cima ficou parada');
     }
     // Movimento: conferido quando a câmera avisar de verdade (fica marcado sozinho)
     if (perfil.has('motion') && perfil.status('motion') !== 'ok') results.push({ id: 'motion', status: perfil.status('motion'), how: 'confere sozinho no primeiro aviso de movimento' });
@@ -951,11 +954,26 @@ async function runFullVistoria() {
     fullVistoria.running = false;
   }
 }
+// O que cada recurso é, em palavras simples, e onde se usa (null: a câmera tem, mas o camera-ai ainda não usa)
+const CAP_INFO = {
+  video: { desc: 'A imagem ao vivo da câmera.', use: 'Na TV e aqui no app.' },
+  twoLenses: { desc: 'Duas lentes: uma fixa, que vê o quarto todo, e outra que gira e aproxima.', use: 'Na TV: escolha a imagem de cima, de baixo ou as duas.' },
+  motor: { desc: 'A lente de baixo gira para os lados e para cima e baixo.', use: 'Seguir pessoa (a lente vai atrás de quem aparece).' },
+  light: { desc: 'Uma luz branca na câmera, que ilumina o lugar e deixa a imagem colorida no escuro.', use: 'Nos ajustes da câmera na TV: Luz branca.' },
+  night: { desc: 'No escuro, a câmera usa infravermelho e enxerga em preto e branco, sem acender luz nenhuma.', use: 'Nos ajustes da câmera na TV: Visão noturna.' },
+  motion: { desc: 'A própria câmera percebe quando algo se mexe e avisa.', use: 'O aviso de movimento na tela da câmera.' },
+  camPerson: { desc: 'A própria câmera reconhece pessoas (além da IA do camera-ai).', use: null },
+  camTrack: { desc: 'A câmera tem um "seguir pessoa" de fábrica. O camera-ai usa o dele, que volta para a posição de descanso.', use: null },
+  audio: { desc: 'Um microfone: dá para ouvir o som do lugar.', use: 'Nos ajustes da câmera na TV: Som.' },
+  talk: { desc: 'Um alto-falante: você fala pelo celular ou pela TV e sua voz sai na câmera, como um interfone.', use: null },
+  siren: { desc: 'A câmera toca um aviso sonoro sozinha (sirene ou voz) quando aparece alguém.', use: null },
+};
+
 function perfilInfo() {
   if (!perfil) return { ok: false, error: 'sem câmera' };
   const p = perfil.data;
   return { ok: true, serial: p.serial, model: p.model, firmware: p.firmware, firstSeen: p.firstSeen, running: fullVistoria.running,
-    caps: Object.entries(CAP_LABELS).filter(([id]) => p.caps[id]).map(([id, label]) => ({ id, label, ...p.caps[id] })),
+    caps: Object.entries(CAP_LABELS).filter(([id]) => p.caps[id]).map(([id, label]) => ({ id, label, ...CAP_INFO[id], ...p.caps[id] })),
     history: p.history.slice(-50).reverse() };
 }
 
