@@ -135,8 +135,8 @@ private fun IconBubble(icon: ImageVector, tint: Color = Blue, bg: Color = palett
 
 /** A row of a list: icon, title, line under it, and an arrow (or what's given on the right). */
 @Composable
-private fun ListRow(icon: ImageVector, title: String, subtitle: String? = null, onClick: (() -> Unit)? = null,
-                    trailing: (@Composable () -> Unit)? = null) {
+private fun ListRow(icon: ImageVector, title: String, subtitle: String? = null, trailing: (@Composable () -> Unit)? = null,
+                    onClick: (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(16.dp, 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = palette.text, modifier = Modifier.size(22.dp))
@@ -186,6 +186,10 @@ private fun LiveVideo(live: Live, view: String, visible: Boolean, modifier: Modi
     Box(modifier.background(Color(0xFF0B0F17)), contentAlignment = Alignment.Center) {
         val img = frame
         if (img == null) {
+            // The camera's still while the video opens, so it isn't a black box
+            rememberPicture(hub, hub.thumbUrl)?.let {
+                Image(it, null, contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.6f)
+            }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
                 Text(if (error != null) "Reconectando…" else "Abrindo a câmera…", color = Color(0xCCFFFFFF), fontSize = 12.sp,
@@ -328,7 +332,7 @@ fun CamerasScreen(live: Live, onCamera: () -> Unit, onAdd: () -> Unit) {
         }
         Row(Modifier.fillMaxWidth().card(palette, selected = true).clickable(onClick = onCamera).padding(12.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            val thumb = rememberPicture(hub, hub.snapshotUrl)
+            val thumb = rememberPicture(hub, hub.thumbUrl)
             Box(Modifier.size(width = 84.dp, height = 64.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF0B0F17))) {
                 thumb?.let { Image(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
             }
@@ -507,15 +511,15 @@ fun SettingsScreen(onOpen: (Screen) -> Unit) {
     Page {
         PageTitle("Ajustes", "Personalize e gerencie seu sistema")
         Column(Modifier.fillMaxWidth().card(palette)) {
-            ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos e vistoria") { onOpen(Screen.Features) }
-            ListRow(Icons.Outlined.Notifications, "Notificações", "Alertas e avisos do sistema") { onOpen(Screen.Soon("Notificações")) }
-            ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem") { onOpen(Screen.Soon("Armazenamento")) }
+            ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos e vistoria", onClick = { onOpen(Screen.Features) })
+            ListRow(Icons.Outlined.Notifications, "Notificações", "Alertas e avisos do sistema", onClick = { onOpen(Screen.Soon("Notificações")) })
+            ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Soon("Armazenamento")) })
         }
         Spacer(Modifier.height(14.dp))
         Column(Modifier.fillMaxWidth().card(palette)) {
-            ListRow(Icons.Outlined.Palette, "Aparência", "Tema claro/escuro") { onOpen(Screen.Appearance) }
-            ListRow(Icons.Outlined.Lock, "Privacidade", "Dados e permissões") { onOpen(Screen.Privacy) }
-            ListRow(Icons.Outlined.Wifi, "Conexão", "Status da rede e dispositivos") { onOpen(Screen.System) }
+            ListRow(Icons.Outlined.Palette, "Aparência", "Tema claro/escuro", onClick = { onOpen(Screen.Appearance) })
+            ListRow(Icons.Outlined.Lock, "Privacidade", "Dados e permissões", onClick = { onOpen(Screen.Privacy) })
+            ListRow(Icons.Outlined.Wifi, "Conexão", "Status da rede e dispositivos", onClick = { onOpen(Screen.System) })
         }
         Spacer(Modifier.height(20.dp))
     }
@@ -528,10 +532,10 @@ fun AppearanceScreen(theme: String, setTheme: (String) -> Unit, onBack: () -> Un
         PageTitle("Aparência", "Tema claro ou escuro")
         Column(Modifier.fillMaxWidth().card(palette)) {
             listOf("system" to "Igual ao celular", "light" to "Claro", "dark" to "Escuro").forEach { (v, label) ->
-                ListRow(Icons.Outlined.Palette, label, onClick = { setTheme(v) }) {
+                ListRow(Icons.Outlined.Palette, label, onClick = { setTheme(v) }, trailing = {
                     Box(Modifier.size(20.dp).background(if (theme == v) Blue else Color.Transparent, CircleShape)
                         .then(if (theme == v) Modifier else Modifier.background(palette.line, CircleShape)))
-                }
+                })
             }
         }
     }

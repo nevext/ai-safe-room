@@ -47,8 +47,8 @@ class Hub(val root: String, val key: String?) {
     /** The live picture as JPEGs (MJPEG): view is whole, top (lens 1) or bottom (lens 2). */
     fun videoUrl(view: String, width: Int, height: Int) = "$base/api/screen/video?view=$view&width=$width&height=$height"
 
-    /** A still of the camera now (for the camera list). */
-    val snapshotUrl: String get() = "$base/api/snapshot"
+    /** A small still of the camera (320 px), ready at once: for lists and while the video opens. */
+    val thumbUrl: String get() = "$base/api/screen/thumb"
 
     /** An activity's thumbnail. */
     fun thumbUrl(name: String) = "$base/api/activity/$name"

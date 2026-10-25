@@ -126,7 +126,8 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
         + `;[sa]fps=${aiFps},scale=${ai[0]}:${ai[1]}[oa]`;
       const args = ['-loglevel', 'error', ...inputArgs, '-i', url, '-filter_complex', graph];
       views.forEach((v, i) => args.push('-map', `[o${i}]`, '-c:v', encoder.name, ...encoder.opts, '-profile:v', 'main', '-bf', '0',
-        '-g', '30', '-b:v', '6M', '-maxrate', '6M', '-bufsize', '2M', '-bsf:v', 'dump_extra',
+        // -g 12: um quadro inteiro por segundo, então quem abre a imagem espera no máximo ~1 s
+        '-g', '12', '-b:v', '6M', '-maxrate', '6M', '-bufsize', '2M', '-bsf:v', 'dump_extra',
         '-f', 'mpegts', '-mpegts_flags', '+resend_headers', '-muxdelay', '0', '-muxpreload', '0',
         `tcp://127.0.0.1:${servers[i].address().port}`));
       args.push('-map', '[oa]', '-f', 'rawvideo', '-pix_fmt', 'rgb24', `tcp://127.0.0.1:${servers[views.length].address().port}`);

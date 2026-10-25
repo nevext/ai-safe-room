@@ -142,6 +142,7 @@ async function connect(addr, user, pass) {
       await loadProfiles();
       await openProfile();
       if (activity.at(-1)?.type !== 'online') logActivity('online', 'Câmera online');
+      refreshCameraThumb();   // a foto das listas já fica pronta
       saveState();
       const opt = await maybeOptimize();   // otimiza na conexão; no-op se já estiver bom
       return { ok: true, authUser: u, blankPass: p === '', optimized: opt.applied || false, ...publicState() };
@@ -863,6 +864,31 @@ function personArrival(r) {
     presence.lastSeen = now;
   }
 }
+// A foto pequena da câmera para as listas: o snapshot da câmera demora ~7 s, então fica uma pronta (320 px), servida
+// na hora e renovada por trás quando tem mais de 1 min
+const cameraThumb = { jpg: null, at: 0, busy: null };
+async function refreshCameraThumb() {
+  cameraThumb.busy ??= (async () => {
+    try {
+      const jpg = await snapshot();
+      cameraThumb.jpg = await new Promise((ok, err) => {
+        const ff = spawn(FFMPEG, ['-loglevel', 'error', '-i', 'pipe:0', '-vf', 'scale=320:-2', '-q:v', '5', '-f', 'mjpeg', 'pipe:1']);
+        const out = []; ff.stdout.on('data', d => out.push(d));
+        ff.on('close', c => c === 0 ? ok(Buffer.concat(out)) : err(new Error('ffmpeg ' + c))); ff.on('error', err); ff.stdin.end(jpg);
+      });
+      cameraThumb.at = Date.now();
+    } catch {} finally { cameraThumb.busy = null; }
+  })();
+  return cameraThumb.busy;
+}
+async function serveCameraThumb(res) {
+  if (!cameraThumb.jpg) await refreshCameraThumb();
+  else if (Date.now() - cameraThumb.at > 60000) refreshCameraThumb();
+  if (!cameraThumb.jpg) return json(res, 503, { error: 'sem foto da câmera agora' });
+  res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache' });
+  res.end(cameraThumb.jpg);
+}
+
 function serveThumb(res, name) {
   if (!/^\d+\.jpg$/.test(name)) return json(res, 404, { error: 'não encontrado' });
   fs.readFile(path.join(ACT_DIR, name), (e, data) => {
@@ -1392,6 +1418,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, perfilInfo());
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
+      case '/api/screen/thumb': return serveCameraThumb(res);
       case '/api/perfil/vistoria': return json(res, 200, await runFullVistoria());
       case '/api/access/pending': return json(res, 200, { requests: pendingRequests() });
       case '/api/access/answer': { const b = await readBody(req); return json(res, 200, accessAnswer(b.id, !!b.allow)); }

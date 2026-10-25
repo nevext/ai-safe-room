@@ -179,7 +179,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
     }
 
     val open = { s: Screen -> previous = screen; screen = s }
-    val back = { screen = tab }
+    val back: () -> Unit = { screen = tab }
     val h = live.hub
     Box(Modifier.fillMaxSize()) {
         when (val s = screen) {
