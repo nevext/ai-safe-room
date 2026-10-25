@@ -45,6 +45,16 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       últimos 5 min × 1,3 + 0,25 s, de 0,5 a 4 s); no nevtv, Fluidez → Automático usa esse valor.
 - [ ] **Senha da câmera** (`/api/camera-password`): pronto no camera-ai, ainda não aplicado. Sem senha,
       a câmera entrega até a senha do Wi-Fi pelo DVRIP.
+- [x] **App AI Safe Room** (`android/`, Kotlin + Compose, abre no Android Studio): acha o computador, entra com
+      Permitir ou senha (cada aparelho com a própria chave), câmera ao vivo com IA, Início com o estado da casa,
+      Proteção e Privacidade, Atividades (resumo do dia, linha 0h–24h, filtro Pessoas, agrupadas, novas com
+      número), zonas para ignorar, família e aparelhos, avisos no celular com foto (serviço em primeiro plano),
+      resumo às 21h, endereço de fora de casa (Tailscale/VPN), tema claro/escuro.
+- [x] **Proteção** (`/api/protection`, com horário) e **modo privacidade** (`/api/privacy`: capas pretas do
+      `AVEnc.VideoWidget` cobrem a imagem para todos, e a IA para). Atividades em `/api/activity`.
+- [ ] **Falar pela câmera e alarme de voz:** a câmera tem 3 vozes prontas (`Ability.VoiceTipType`: Alarme, "Você
+      entrou na área de monitoramento", Personalizar) e o aviso de voz no movimento (`Detect.MotionDetect`
+      `VoiceEnable`, desligado). Falta conferir ouvindo (faz barulho no quarto) e o áudio de ida (interfone).
 - [x] **Perfil de cada câmera** (`server/perfil.mjs`, `server/perfis/<serial>.json`, `/api/perfil`): o que ela
       tem, o que foi conferido e o histórico (vistorias, níveis, conexões, recursos). Ao conectar, lê o que a câmera
       diz (ONVIF; nas XM, a lista `SystemFunction` pelo DVRIP). A **vistoria completa** (menu ☰ → Teste da câmera →
