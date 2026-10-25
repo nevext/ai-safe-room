@@ -125,5 +125,7 @@ FEATURES.md           o que está pronto e o que falta
 
 ## Próximos passos
 
+O plano do produto que nasce daqui, o **AI Safe Cam** (níveis por câmera, vistoria, planos, onde roda a IA): [`docs/AI-SAFE-CAM.md`](docs/AI-SAFE-CAM.md).
+
 Ver [`FEATURES.md`](FEATURES.md) — inclui o empacotamento em **APK** e as funcionalidades
 que faltam.
