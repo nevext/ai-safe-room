@@ -11,7 +11,7 @@
     <!-- O app fala com o computador de casa (camera-ai) por HTTP na rede local -->
     <application
         android:label="AI Safe Room"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.AiSafeRoom">
         <activity

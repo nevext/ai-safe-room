@@ -1,6 +1,9 @@
 package io.nevext.aisaferoom
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -21,10 +24,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -74,34 +74,11 @@ fun Modifier.card(p: Palette, radius: Dp = 18.dp, selected: Boolean = false): Mo
         .background(p.card, RoundedCornerShape(radius))
         .border(1.dp, if (selected) Blue else p.line, RoundedCornerShape(radius))
 
-/** The shield with the eye (the lens). */
+/** The AI Safe Room logo (someone holding the camera close); the lighter version in dark mode. size is its height. */
 @Composable
-fun Shield(size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        val shield = Path().apply {
-            moveTo(w * 0.5f, 0f)
-            lineTo(w * 0.93f, h * 0.15f)
-            cubicTo(w * 0.97f, h * 0.17f, w, h * 0.21f, w, h * 0.26f)
-            lineTo(w, h * 0.47f)
-            cubicTo(w, h * 0.72f, w * 0.78f, h * 0.9f, w * 0.5f, h)
-            cubicTo(w * 0.22f, h * 0.9f, 0f, h * 0.72f, 0f, h * 0.47f)
-            lineTo(0f, h * 0.26f)
-            cubicTo(0f, h * 0.21f, w * 0.03f, h * 0.17f, w * 0.07f, h * 0.15f)
-            close()
-        }
-        drawPath(shield, Brush.verticalGradient(listOf(Color(0xFF3B82FF), Color(0xFF1557E6))))
-        val eye = Path().apply {
-            moveTo(w * 0.17f, h * 0.5f)
-            cubicTo(w * 0.3f, h * 0.3f, w * 0.7f, h * 0.3f, w * 0.83f, h * 0.5f)
-            cubicTo(w * 0.7f, h * 0.7f, w * 0.3f, h * 0.7f, w * 0.17f, h * 0.5f)
-            close()
-        }
-        drawPath(eye, Color.White)
-        drawCircle(Blue, radius = w * 0.13f, center = Offset(w * 0.5f, h * 0.5f))
-        drawCircle(Color.White, radius = w * 0.05f, center = Offset(w * 0.5f, h * 0.5f))
-    }
+fun Logo(size: Dp, modifier: Modifier = Modifier) {
+    Image(painterResource(if (palette.dark) R.drawable.logo_dark else R.drawable.logo), contentDescription = "AI Safe Room",
+        modifier = modifier.height(size).aspectRatio(700f / 800f))
 }
 
 /** "AI Safe Room" with "AI" in blue. */

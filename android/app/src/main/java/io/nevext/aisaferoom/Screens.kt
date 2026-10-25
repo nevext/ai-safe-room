@@ -239,7 +239,7 @@ fun FullscreenVideo(live: Live, view: String, visible: Boolean, onClose: () -> U
 fun SplashScreen() {
     Box(Modifier.fillMaxSize().background(palette.background)) {
         Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-            Shield(96.dp)
+            Logo(110.dp)
             Spacer(Modifier.height(28.dp))
             Brand(30.sp)
             Text("Sua casa, sempre protegida.", color = palette.muted, fontSize = 14.sp, modifier = Modifier.padding(top = 10.dp))
@@ -289,7 +289,7 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
     val scope = rememberCoroutineScope()
     Page {
         Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Shield(26.dp)
+            Logo(29.dp)
             Spacer(Modifier.width(10.dp))
             Brand(20.sp, Modifier.weight(1f))
             Icon(Icons.Outlined.Settings, "Sistema", Modifier.clip(CircleShape).clickable(onClick = onSystem).padding(8.dp))
@@ -740,7 +740,7 @@ fun SystemScreen(live: Live, prefs: android.content.SharedPreferences, onBack: (
     Page {
         TopBar("", null, onBack)
         Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Shield(64.dp)
+            Logo(73.dp)
             Brand(24.sp, Modifier.padding(top = 16.dp))
             Text("Segurança e tranquilidade,\ncom inteligência.", color = palette.muted, fontSize = 13.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 6.dp))
@@ -903,7 +903,7 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onBack: (() -> 
     Page {
         onBack?.let { TopBar("", null, it) }
         Column(Modifier.fillMaxWidth().padding(top = if (onBack == null) 48.dp else 8.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Shield(72.dp)
+            Logo(82.dp)
             Brand(26.sp, Modifier.padding(top = 18.dp))
             Text("Conecte ao computador de casa que cuida das câmeras. O celular precisa estar no mesmo Wi-Fi.",
                 color = palette.muted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
@@ -965,7 +965,7 @@ fun LetInScreen(root: String, onKey: (String) -> Unit, onBack: () -> Unit) {
     Page {
         TopBar("", null, onBack)
         Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Shield(64.dp)
+            Logo(73.dp)
             Text("Liberar este celular", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
             Text("No computador (${root.removePrefix("http://")}), toque em Permitir.", color = palette.muted, fontSize = 13.sp,
                 textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
