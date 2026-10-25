@@ -46,6 +46,9 @@ sealed interface Screen {
     data object System : Screen
     data object Appearance : Screen
     data object Privacy : Screen
+    data object Protection : Screen
+    data object Family : Screen
+    data object Zones : Screen
     data class Soon(val title: String) : Screen
 }
 
@@ -67,22 +70,37 @@ class Live {
     /** "XiongMai Dual Lens" from what camera-ai calls the camera. */
     val cameraKind: String get() = info?.optJSONObject("camera")?.optString("kind")?.substringBefore(" (")?.ifEmpty { null } ?: "Câmera"
     val twoLenses: Boolean get() = info?.optJSONObject("lenses")?.optInt("count") == 2
+    val protectionOn: Boolean get() = info?.optJSONObject("protection")?.optBoolean("on") == true
+    val privacyOn: Boolean get() = info?.optJSONObject("privacy")?.optBoolean("on") == true
+    var seenAt by mutableStateOf(0L)   // activities after this are new (the number on the Atividades tab)
+    val unseen: Int get() = (0 until activity.length()).mapNotNull { activity.optJSONObject(it) }
+        .count { it.optString("type") in setOf("person", "animal") && it.optLong("at") > seenAt }
 }
 
 class MainActivity : ComponentActivity() {
     /** Only while the app is on screen: the picture and the AI stop when it isn't. */
     private val visible = mutableStateOf(false)
+    /** A notification asked for a screen ("activity"). */
+    private val asked = mutableStateOf<String?>(null)
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        asked.value = intent.getStringExtra("open")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("aisaferoom", Context.MODE_PRIVATE)
+        asked.value = intent?.getStringExtra("open")
+        // The warnings keep going with the app closed, if they were on
+        if (prefs.getBoolean("notify", false)) runCatching { Guard.start(this) }
         setContent {
             var theme by remember { mutableStateOf(prefs.getString("theme", "system") ?: "system") }
             val dark = when (theme) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
             SafeRoomTheme(dark) {
                 Surface(Modifier.fillMaxSize(), color = palette.background, contentColor = palette.text) {
-                    App(prefs, visible.value, theme) { theme = it; prefs.edit().putString("theme", it).apply() }
+                    App(prefs, visible.value, theme, asked) { theme = it; prefs.edit().putString("theme", it).apply() }
                 }
             }
         }
@@ -100,8 +118,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTheme: (String) -> Unit) {
-    val live = remember { Live().apply { hub = prefs.getString("root", null)?.let { Hub(it, prefs.getString("key", null)) } } }
+private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked: androidx.compose.runtime.MutableState<String?>,
+                setTheme: (String) -> Unit) {
+    val live = remember {
+        Live().apply {
+            hub = prefs.getString("root", null)?.let { Hub(it, prefs.getString("key", null)) }
+            seenAt = prefs.getLong("seenAt", 0)
+        }
+    }
     var screen by remember { mutableStateOf<Screen>(if (live.hub == null) Screen.Find else Screen.Splash) }
     var tab by remember { mutableStateOf<Screen>(Screen.Home) }
     var fullscreen by remember { mutableStateOf<String?>(null) }   // the view shown full screen, if any
@@ -114,7 +138,8 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
         screen = Screen.Splash
     }
     val forget = {
-        prefs.edit().remove("root").remove("key").apply()
+        prefs.edit().remove("root").remove("key").remove("remote").apply()
+        Guard.stop(activity)
         live.hub = null
         live.info = null
         live.connected = false
@@ -136,6 +161,13 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
                 live.problem = null
             }.onFailure {
                 if (it is Locked) { screen = Screen.LetIn(h.root); return@LaunchedEffect }
+                // At home it's the Wi-Fi address; away, the one set in Conexão (and back again)
+                val home = prefs.getString("root", null)
+                val other = if (h.root == home) prefs.getString("remote", null) else home
+                if (other != null && withContext(Dispatchers.IO) { runCatching { h.at(other).screen() }.isSuccess }) {
+                    live.hub = h.at(other)
+                    return@LaunchedEffect
+                }
                 live.connected = false
                 live.problem = "Sem conexão com o computador"
             }
@@ -159,8 +191,13 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
                         when (e.optString("type")) {
                             "detections" -> live.detections = parseDetections(e.optJSONArray("items"))
                             "motion" -> live.moving = e.optBoolean("active")
-                            "activity" -> live.activity = JSONArray().put(e).also { a ->
-                                for (i in 0 until minOf(live.activity.length(), 199)) a.put(live.activity.opt(i))
+                            "activity" -> live.activity = JSONArray().also { a ->
+                                // A grouped movement comes again with its new end and count: it takes its own place
+                                if (!e.optBoolean("update")) a.put(e)
+                                for (i in 0 until minOf(live.activity.length(), 199)) {
+                                    val old = live.activity.optJSONObject(i)
+                                    a.put(if (e.optBoolean("update") && old?.optLong("at") == e.optLong("at")) e else old)
+                                }
                             }
                         }
                     }, { running })
@@ -178,6 +215,13 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
         onDispose {}
     }
 
+    LaunchedEffect(asked.value, live.connected) {
+        if (asked.value == "activity" && live.hub != null && screen != Screen.Splash) { tab = Screen.Activity; screen = Screen.Activity; asked.value = null }
+    }
+    LaunchedEffect(screen) {
+        if (screen == Screen.Activity) { live.seenAt = System.currentTimeMillis(); prefs.edit().putLong("seenAt", live.seenAt).apply() }
+    }
+
     val open = { s: Screen -> previous = screen; screen = s }
     val back: () -> Unit = { screen = tab }
     val h = live.hub
@@ -191,12 +235,13 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
                     onBack = if (h != null) back else null)
             }
             is Screen.LetIn -> LetInScreen(s.root, onKey = { keep(Hub(s.root, it)) }, onBack = { screen = Screen.Find })
-            Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, onTab = { tab = it; screen = it }) {
+            Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, live.unseen, onTab = { tab = it; screen = it }) {
                 when (s) {
                     Screen.Home -> HomeScreen(live, visible, onCamera = { open(Screen.Camera) }, onSystem = { open(Screen.System) },
-                        onActivity = { tab = Screen.Activity; screen = Screen.Activity }, onFullscreen = { fullscreen = "whole" })
+                        onActivity = { tab = Screen.Activity; screen = Screen.Activity }, onFullscreen = { fullscreen = "whole" },
+                        onProtection = { open(Screen.Protection) })
                     Screen.Cameras -> CamerasScreen(live, onCamera = { open(Screen.Camera) }, onAdd = { open(Screen.Find) })
-                    Screen.Activity -> ActivityScreen(live)
+                    Screen.Activity -> ActivityScreen(live, onLive = { open(Screen.Camera) })
                     else -> SettingsScreen(onOpen = open)
                 }
             }
@@ -207,11 +252,23 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, setTh
             Screen.Features -> if (h != null) {
                 val from = { screen = if (previous == Screen.Camera) Screen.Camera else tab }
                 BackHandler(onBack = from)
-                FeaturesScreen(live, onBack = from)
+                FeaturesScreen(live, onBack = from, onZones = { screen = Screen.Zones })
+            }
+            Screen.Zones -> if (h != null) {
+                BackHandler { screen = Screen.Features }
+                ZonesScreen(live, onBack = { screen = Screen.Features })
+            }
+            Screen.Protection -> if (h != null) {
+                BackHandler(onBack = back)
+                ProtectionScreen(live, prefs, onBack = back)
+            }
+            Screen.Family -> if (h != null) {
+                BackHandler(onBack = back)
+                FamilyScreen(live, onBack = back)
             }
             Screen.System -> {
                 BackHandler(onBack = back)
-                SystemScreen(live, onBack = back, onLeave = forget)
+                SystemScreen(live, prefs, onBack = back, onLeave = forget)
             }
             Screen.Appearance -> {
                 BackHandler(onBack = back)

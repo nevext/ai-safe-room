@@ -515,11 +515,14 @@ function setFollow(enabled) {
 function startAi() {
   clearTimeout(ai.idle);
   if (ai.stop || !ai.model || !live || directWatch.on || privacy.on) return;
-  ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => {
+  const analyze = analyzer({ model: ai.model, onResult: r => {
     r = ignoreZones(r);
     ai.last = r; updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
     arrivals(r);
-  } }));
+  } });
+  // O quadro que a IA olha fica guardado: a miniatura de uma pessoa sai dele, do mesmo instante (o snapshot da
+  // câmera demora ~7 s e já mostrava outra coisa)
+  ai.stop = live.onAiFrame((frame, w, h) => { lastAiFrame = { frame, w, h, at: Date.now() }; analyze(frame, w, h); });
 }
 // Uma TV assistindo direto da câmera: esta câmera só aguenta uma conexão de vídeo (com a segunda, a TV caiu para
 // 5 quadros/s e o camera-ai travou; medido em 25/10). Então o camera-ai solta a câmera enquanto a TV avisa (a cada
@@ -846,13 +849,15 @@ async function logActivity(type, text, { thumb = false, box = null, label = null
   if (box) entry.box = box;
   if (label) entry.label = label;
   if (type === 'person' || type === 'animal') entry.alert = protection.on;   // com a Proteção ligada, avisa no celular
-  if (thumb) entry.thumb = await activityThumb();
+  if (thumb) entry.thumb = await activityThumb(type === 'person' || type === 'animal');
   activity = [...activity, entry].slice(-500);
   try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
   broadcast({ type: 'activity', ...entry });
 }
-async function activityThumb() {
+let lastAiFrame = null;
+async function activityThumb(fromAi = false) {
   if (!HAS_FFMPEG || !cam.addr) return null;
+  if (fromAi && lastAiFrame && Date.now() - lastAiFrame.at < 3000) return aiFrameThumb(lastAiFrame);
   try {
     const jpg = await snapshot();
     const name = `${Date.now()}.jpg`;
@@ -863,6 +868,21 @@ async function activityThumb() {
     return name;
   } catch { return null; }
 }
+// O quadro da IA (RGB, esticado para 640×720) volta à proporção da câmera e vira JPEG de 320 px
+async function aiFrameThumb({ frame, w, h }) {
+  const prof = videoPick.using === 'sub' ? subProfile() : mainProfile();
+  const aspect = prof?.width && prof?.height ? prof.width / prof.height : 1.5;
+  const name = `${Date.now()}.jpg`;
+  try {
+    await new Promise((ok, err) => {
+      const ff = spawn(FFMPEG, ['-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${w}x${h}`, '-i', 'pipe:0',
+        '-vf', `scale=320:${Math.round(320 / aspect / 2) * 2}`, '-q:v', '6', '-y', path.join(ACT_DIR, name)]);
+      ff.on('close', c => c === 0 ? ok() : err(new Error('ffmpeg ' + c))); ff.on('error', err); ff.stdin.end(frame);
+    });
+    return name;
+  } catch { return null; }
+}
+
 // Miniaturas com mais de 7 dias saem
 setInterval(() => {
   const old = Date.now() - 7 * 864e5;
@@ -876,9 +896,11 @@ function arrivals(r) {
   const now = Date.now(), where = perfil?.data.name || 'Câmera';
   for (const kind of ['person', 'animal']) {
     const p = presence[kind];
-    const best = (r.items || []).filter(it => it.kind === kind && it.score >= 0.5).sort((a, b) => b.score - a.score)[0];
+    // Animal pede mais certeza: um cobertor perto da câmera virou "Cachorro" com nota de 0,5 (medido em 25/10)
+    const min = kind === 'person' ? 0.5 : 0.65, hits = kind === 'person' ? 3 : 4;
+    const best = (r.items || []).filter(it => it.kind === kind && it.score >= min && !it.uncertain).sort((a, b) => b.score - a.score)[0];
     if (!best) { p.hits = 0; continue; }
-    if (++p.hits < 3) continue;
+    if (++p.hits < hits) continue;
     if (now - p.lastSeen > 120000) {
       const name = kind === 'person' ? 'Pessoa' : best.label?.pt || 'Animal';
       logActivity(kind, `${name} no ${where}`, { thumb: true, box: best.box, label: name });

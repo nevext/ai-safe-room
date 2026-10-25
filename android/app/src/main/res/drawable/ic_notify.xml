@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- O escudo com o olho, numa cor só (ícone da barra de notificações) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12,2 L19.5,4.8 C20.4,5.1 21,6 21,7 L21,11.5 C21,16.3 17.2,20.3 12,22 C6.8,20.3 3,16.3 3,11.5 L3,7 C3,6 3.6,5.1 4.5,4.8 Z M12,8.5 C9.3,8.5 7.2,10.2 6.3,12 C7.2,13.8 9.3,15.5 12,15.5 C14.7,15.5 16.8,13.8 17.7,12 C16.8,10.2 14.7,8.5 12,8.5 Z M12,10.2 A1.8,1.8 0 1,1 12,13.8 A1.8,1.8 0 1,1 12,10.2 Z" />
+</vector>

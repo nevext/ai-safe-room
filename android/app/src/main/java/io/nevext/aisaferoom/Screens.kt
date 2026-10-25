@@ -51,6 +51,13 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.VideocamOff
 import androidx.compose.material.icons.outlined.Wifi
+import androidx.compose.material.icons.outlined.CropFree
+import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.Pets
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.Waves
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
@@ -102,7 +109,7 @@ import java.util.Locale
 
 /** The page title and its grey line under it ("Câmeras / Seus dispositivos conectados"). */
 @Composable
-private fun PageTitle(title: String, subtitle: String? = null, action: (@Composable () -> Unit)? = null) {
+internal fun PageTitle(title: String, subtitle: String? = null, action: (@Composable () -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold)
@@ -114,7 +121,7 @@ private fun PageTitle(title: String, subtitle: String? = null, action: (@Composa
 
 /** Back arrow, a title with its line under it, and an optional icon on the right. */
 @Composable
-private fun TopBar(title: String, subtitle: String? = null, onBack: () -> Unit, action: (@Composable () -> Unit)? = null) {
+internal fun TopBar(title: String, subtitle: String? = null, onBack: () -> Unit, action: (@Composable () -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Voltar", Modifier.clip(CircleShape).clickable(onClick = onBack).padding(8.dp))
         Column(Modifier.weight(1f).padding(start = 4.dp)) {
@@ -127,7 +134,7 @@ private fun TopBar(title: String, subtitle: String? = null, onBack: () -> Unit, 
 
 /** An icon in a soft blue circle. */
 @Composable
-private fun IconBubble(icon: ImageVector, tint: Color = Blue, bg: Color = palette.soft, size: Int = 40) {
+internal fun IconBubble(icon: ImageVector, tint: Color = Blue, bg: Color = palette.soft, size: Int = 40) {
     Box(Modifier.size(size.dp).background(bg, CircleShape), contentAlignment = Alignment.Center) {
         Icon(icon, null, tint = tint, modifier = Modifier.size((size * 0.5f).dp))
     }
@@ -135,7 +142,7 @@ private fun IconBubble(icon: ImageVector, tint: Color = Blue, bg: Color = palett
 
 /** A row of a list: icon, title, line under it, and an arrow (or what's given on the right). */
 @Composable
-private fun ListRow(icon: ImageVector, title: String, subtitle: String? = null, trailing: (@Composable () -> Unit)? = null,
+internal fun ListRow(icon: ImageVector, title: String, subtitle: String? = null, trailing: (@Composable () -> Unit)? = null,
                     onClick: (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(16.dp, 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
@@ -149,14 +156,14 @@ private fun ListRow(icon: ImageVector, title: String, subtitle: String? = null, 
 }
 
 @Composable
-private fun Page(content: @Composable ColumnScope.() -> Unit) {
+internal fun Page(content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         content = content)
 }
 
-private val clock = SimpleDateFormat("HH:mm", Locale("pt", "BR"))
+internal val clock = SimpleDateFormat("HH:mm", Locale("pt", "BR"))
 /** "Hoje, 14:32", "Ontem, 22:17", "12/10, 09:05". */
-private fun whenText(at: Long): String {
+internal fun whenText(at: Long): String {
     val day = Calendar.getInstance().apply { timeInMillis = at }
     val today = Calendar.getInstance()
     val days = (today.get(Calendar.YEAR) - day.get(Calendar.YEAR)) * 366 + today.get(Calendar.DAY_OF_YEAR) - day.get(Calendar.DAY_OF_YEAR)
@@ -247,7 +254,7 @@ fun SplashScreen() {
 // MARK: - The bottom bar
 
 @Composable
-fun Tabs(current: Screen, onTab: (Screen) -> Unit, content: @Composable () -> Unit) {
+fun Tabs(current: Screen, unseen: Int, onTab: (Screen) -> Unit, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) { content() }
         Row(Modifier.fillMaxWidth().background(palette.card).navigationBarsPadding().padding(vertical = 6.dp)) {
@@ -260,7 +267,12 @@ fun Tabs(current: Screen, onTab: (Screen) -> Unit, content: @Composable () -> Un
                 val on = screen == current
                 Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable { onTab(screen) }.padding(vertical = 6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(if (on) icons.second else icons.first, label, tint = if (on) Blue else palette.muted, modifier = Modifier.size(24.dp))
+                    Box {
+                        Icon(if (on) icons.second else icons.first, label, tint = if (on) Blue else palette.muted, modifier = Modifier.size(24.dp))
+                        if (screen == Screen.Activity && unseen > 0) Text(if (unseen > 9) "9+" else "$unseen", color = Color.White, fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-4).dp)
+                                .background(Orange, CircleShape).padding(horizontal = 5.dp, vertical = 1.dp))
+                    }
                     Text(label, fontSize = 11.sp, color = if (on) Blue else palette.muted, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
                 }
             }
@@ -271,7 +283,10 @@ fun Tabs(current: Screen, onTab: (Screen) -> Unit, content: @Composable () -> Un
 // MARK: - Início
 
 @Composable
-fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () -> Unit, onActivity: () -> Unit, onFullscreen: () -> Unit) {
+fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () -> Unit, onActivity: () -> Unit, onFullscreen: () -> Unit,
+               onProtection: () -> Unit) {
+    val hub = live.hub ?: return
+    val scope = rememberCoroutineScope()
     Page {
         Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Shield(26.dp)
@@ -279,45 +294,96 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
             Brand(20.sp, Modifier.weight(1f))
             Icon(Icons.Outlined.Settings, "Sistema", Modifier.clip(CircleShape).clickable(onClick = onSystem).padding(8.dp))
         }
-        Box(Modifier.padding(top = 6.dp, bottom = 16.dp)) {
+        Box(Modifier.padding(top = 6.dp, bottom = 14.dp)) {
             StatusDot(live.connected, if (live.connected) "Sistema conectado · 1 câmera ativa" else live.problem ?: "Conectando…")
         }
-        Box(Modifier.fillMaxWidth().aspectRatio(0.98f).clip(RoundedCornerShape(20.dp)).clickable(onClick = onCamera)) {
+
+        // The state of the house first: someone showed up, the camera isn't looking, or all calm
+        val recent = (0 until live.activity.length()).mapNotNull { live.activity.optJSONObject(it) }
+            .firstOrNull { it.optString("type") in setOf("person", "animal") && System.currentTimeMillis() - it.optLong("at") < 30 * 60_000 }
+        when {
+            live.privacyOn -> AlertCard(Icons.Outlined.VisibilityOff, palette.muted, palette.line, "A câmera não está olhando",
+                "Modo privacidade ligado: a imagem fica coberta e nada é guardado.")
+            recent != null -> AlertCard(look(recent.optString("type")).icon, look(recent.optString("type")).tint, look(recent.optString("type")).bg, recent.optString("text"),
+                "${whenText(recent.optLong("at"))} · toque para ver", onClick = onActivity,
+                thumb = recent.optString("thumb").takeIf { it.isNotEmpty() && it != "null" }?.let { hub.thumbUrl(it) }, hub = hub)
+            else -> AlertCard(Icons.Outlined.Shield, Green, Color(0x2222C55E), "Tudo tranquilo",
+                if (live.protectionOn) "Proteção ativada: avisamos se aparecer alguém." else "Ninguém apareceu na última meia hora.", onClick = onActivity)
+        }
+        Spacer(Modifier.height(14.dp))
+
+        Box(Modifier.fillMaxWidth().aspectRatio(1.05f).clip(RoundedCornerShape(20.dp)).clickable(onClick = onCamera)) {
             LiveVideo(live, "whole", visible, Modifier.fillMaxSize())
             VideoChip("AO VIVO", live = true, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
-            if (live.twoLenses) VideoChip("2 lentes", modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
             Row(Modifier.align(Alignment.BottomStart).fillMaxWidth()
                 .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, Color(0xAA000000))))
                 .padding(14.dp), verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {
                     Text(live.cameraName, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    Text(live.cameraKind, color = Color(0xCCFFFFFF), fontSize = 12.sp)
+                    Text(if (live.moving) "Movimento agora" else if (live.connected) "Online" else "Offline", color = Color(0xCCFFFFFF), fontSize = 12.sp)
                 }
                 Icon(Icons.Outlined.Fullscreen, "Tela cheia", tint = Color.White,
                     modifier = Modifier.clip(CircleShape).clickable(onClick = onFullscreen).padding(4.dp))
             }
         }
-        Spacer(Modifier.height(16.dp))
-        Column(Modifier.fillMaxWidth().card(palette).clickable(onClick = onActivity).padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Shield, null, tint = Blue, modifier = Modifier.size(18.dp))
-                Text("Atividade recente", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp))
-            }
-            // The newest movement or person in the last 3 hours, or "all calm"
-            val recent = (0 until live.activity.length()).mapNotNull { live.activity.optJSONObject(it) }
-                .firstOrNull { it.optString("type") in setOf("motion", "person") && System.currentTimeMillis() - it.optLong("at") < 3 * 3600_000 }
-            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (recent == null) IconBubble(Icons.Outlined.Shield) else IconBubble(Icons.AutoMirrored.Outlined.DirectionsWalk,
-                    tint = if (recent.optString("type") == "person") Orange else Blue)
-                Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                    Text(recent?.optString("text") ?: "Tudo tranquilo", fontWeight = FontWeight.Medium, fontSize = 15.sp)
-                    Text(recent?.let { "${whenText(it.optLong("at"))} · ${it.optString("camera")}" } ?: "Nenhum movimento relevante nas últimas horas.",
-                        color = palette.muted, fontSize = 12.sp)
+        Spacer(Modifier.height(14.dp))
+
+        // Away mode and privacy, one tap each
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ModeCard(Icons.Outlined.Shield, "Proteção", if (live.protectionOn) "Ativada" else "Desativada", live.protectionOn,
+                Modifier.weight(1f), onLongClick = onProtection) { on ->
+                scope.launch {
+                    withContext(Dispatchers.IO) { runCatching { hub.setProtection(on); hub.screen() } }
+                        .onSuccess { live.info = it }.onFailure { live.problem = "Não deu: ${it.message}" }
                 }
-                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = palette.muted)
+            }
+            ModeCard(Icons.Outlined.VisibilityOff, "Privacidade", if (live.privacyOn) "Câmera coberta" else "Desligada", live.privacyOn,
+                Modifier.weight(1f)) { on ->
+                scope.launch {
+                    withContext(Dispatchers.IO) { runCatching { hub.setPrivacy(on); hub.screen() } }
+                        .onSuccess { live.info = it }.onFailure { live.problem = "Não deu: ${it.message}" }
+                }
             }
         }
+        Text("Proteção: avisa no celular quando aparecer alguém. Privacidade: a câmera cobre a imagem e não guarda nada.",
+            color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** The big card at the top of Início: what's going on in the house. */
+@Composable
+private fun AlertCard(icon: ImageVector, tint: Color, bg: Color, title: String, text: String, onClick: (() -> Unit)? = null,
+                      thumb: String? = null, hub: Hub? = null) {
+    Row(Modifier.fillMaxWidth().card(palette).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        IconBubble(icon, tint, bg, size = 46)
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Text(text, color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+        if (thumb != null && hub != null) {
+            val pic = rememberPicture(hub, thumb)
+            Box(Modifier.size(width = 70.dp, height = 50.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF0B0F17))) {
+                pic?.let { Image(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+            }
+        } else if (onClick != null) Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = palette.muted)
+    }
+}
+
+/** A mode with its switch (Proteção, Privacidade); a long press opens its settings. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun ModeCard(icon: ImageVector, title: String, state: String, on: Boolean, modifier: Modifier, onLongClick: (() -> Unit)? = null,
+                     onChange: (Boolean) -> Unit) {
+    Column(modifier.card(palette, selected = on).combinedClickable(onClick = { onChange(!on) }, onLongClick = onLongClick).padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBubble(icon, if (on) Blue else palette.muted, if (on) palette.soft else palette.line, size = 36)
+            Spacer(Modifier.weight(1f))
+            Switch(on, onCheckedChange = onChange, colors = SwitchDefaults.colors(checkedTrackColor = Blue))
+        }
+        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+        Text(state, fontSize = 12.sp, color = if (on) Blue else palette.muted)
     }
 }
 
@@ -426,23 +492,39 @@ fun CameraScreen(live: Live, visible: Boolean, onBack: () -> Unit, onFeatures: (
 // MARK: - Atividades
 
 private val FILTERS = listOf(
-    "Todas" to emptySet(),
-    "Movimento" to setOf("motion", "person"),
-    "Sistema" to setOf("night", "light"),
-    "Câmera" to setOf("online", "offline"),
+    "Pessoas" to setOf("person", "animal"),
+    "Tudo" to emptySet(),
+    "Movimento" to setOf("motion"),
+    "Câmera" to setOf("online", "offline", "night", "light", "quality", "protection", "privacy"),
 )
 
+private fun dayOf(at: Long): Calendar = Calendar.getInstance().apply {
+    timeInMillis = at; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+}
+
+/** "Hoje", "Ontem", "Sexta, 24/10". */
+private fun dayTitle(at: Long): String {
+    val days = ((dayOf(System.currentTimeMillis()).timeInMillis - dayOf(at).timeInMillis) / 86_400_000L).toInt()
+    return when (days) {
+        0 -> "Hoje"
+        1 -> "Ontem"
+        else -> SimpleDateFormat("EEEE, dd/MM", Locale("pt", "BR")).format(Date(at)).replaceFirstChar { it.uppercase() }
+    }
+}
+
 @Composable
-fun ActivityScreen(live: Live) {
+fun ActivityScreen(live: Live, onLive: () -> Unit) {
     val hub = live.hub ?: return
     var filter by remember { mutableStateOf(0) }
     var opened by remember { mutableStateOf<JSONObject?>(null) }
     val all = (0 until live.activity.length()).mapNotNull { live.activity.optJSONObject(it) }
     val shown = FILTERS[filter].second.let { types -> if (types.isEmpty()) all else all.filter { it.optString("type") in types } }
+    val today = all.filter { it.optLong("at") >= dayOf(System.currentTimeMillis()).timeInMillis }
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 20.dp)) {
         item {
             PageTitle("Atividades", "Histórico de eventos e detecções")
-            Row(Modifier.padding(bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DaySummary(today)
+            Row(Modifier.padding(top = 14.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FILTERS.forEachIndexed { i, (label, _) ->
                     val on = i == filter
                     Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = if (on) Color.White else palette.muted,
@@ -452,53 +534,132 @@ fun ActivityScreen(live: Live) {
             }
         }
         if (shown.isEmpty()) item {
-            Text(if (all.isEmpty()) "Nada por aqui ainda. Movimentos, pessoas e mudanças da câmera aparecem aqui." else "Nada deste tipo ainda.",
-                color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 24.dp))
+            Text(when {
+                all.isEmpty() -> "Nada por aqui ainda. Pessoas, animais, movimentos e mudanças da câmera aparecem aqui."
+                filter == 0 -> "Ninguém apareceu. Em \"Tudo\" ficam os movimentos e as mudanças da câmera."
+                else -> "Nada deste tipo ainda."
+            }, color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 24.dp))
         }
-        items(shown) { a -> ActivityRow(hub, a) { opened = a } }
+        // By day, newest first
+        shown.groupBy { dayOf(it.optLong("at")).timeInMillis }.forEach { (day, items) ->
+            item(key = "d$day") {
+                Text(dayTitle(day), fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = palette.muted,
+                    modifier = Modifier.padding(top = 14.dp, bottom = 2.dp))
+            }
+            items(items, key = { "a" + it.optLong("at") + it.optString("type") }) { a ->
+                ActivityRow(hub, a, isNew = a.optLong("at") > live.seenAt && a.optString("type") in setOf("person", "animal")) { opened = a }
+            }
+        }
         item { Spacer(Modifier.height(20.dp)) }
     }
-    // The activity big: its picture (if it has one), what and when
-    opened?.let { a ->
-        androidx.compose.ui.window.Dialog(onDismissRequest = { opened = null }) {
-            Column(Modifier.fillMaxWidth().card(palette, 20.dp).padding(14.dp)) {
-                a.optString("thumb").takeIf { it.isNotEmpty() && it != "null" }?.let { name ->
-                    val pic = rememberPicture(hub, hub.thumbUrl(name))
-                    Box(Modifier.fillMaxWidth().aspectRatio(0.9f).clip(RoundedCornerShape(14.dp)).background(Color(0xFF0B0F17))) {
-                        pic?.let { Image(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
-                    }
-                }
-                Text(a.optString("text"), fontWeight = FontWeight.SemiBold, fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
-                Text("${whenText(a.optLong("at"))} · ${a.optString("camera")}", color = palette.muted, fontSize = 13.sp)
-                TextButton(onClick = { opened = null }, modifier = Modifier.align(Alignment.End)) { Text("Fechar", color = Blue) }
+    opened?.let { a -> ActivityDetail(hub, a, onClose = { opened = null }, onLive = { opened = null; onLive() }) }
+}
+
+/** Today in one line and a strip of the day (0h to 24h) with a dot where something happened. */
+@Composable
+private fun DaySummary(today: List<JSONObject>) {
+    val people = today.count { it.optString("type") == "person" }
+    val animals = today.count { it.optString("type") == "animal" }
+    val moves = today.filter { it.optString("type") == "motion" }.sumOf { it.optInt("count", 1) }
+    Column(Modifier.fillMaxWidth().card(palette).padding(16.dp)) {
+        Text("Hoje", fontSize = 12.sp, color = palette.muted)
+        Text(listOf("$people ${if (people == 1) "pessoa" else "pessoas"}", "$animals ${if (animals == 1) "animal" else "animais"}",
+            "$moves ${if (moves == 1) "movimento" else "movimentos"}").joinToString(" · "), fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+            modifier = Modifier.padding(top = 2.dp))
+        val start = dayOf(System.currentTimeMillis()).timeInMillis
+        val line = palette.line
+        Canvas(Modifier.fillMaxWidth().height(26.dp).padding(top = 10.dp)) {
+            drawRoundRect(line, cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f), size = Size(size.width, 8.dp.toPx()),
+                topLeft = Offset(0f, (size.height - 8.dp.toPx()) / 2))
+            val nowX = ((System.currentTimeMillis() - start) / 86_400_000f) * size.width
+            drawLine(Blue.copy(alpha = 0.35f), Offset(nowX, 0f), Offset(nowX, size.height), strokeWidth = 2.dp.toPx())
+            for (a in today) {
+                val x = ((a.optLong("at") - start) / 86_400_000f) * size.width
+                val color = when (a.optString("type")) { "person" -> Orange; "animal" -> Color(0xFFA855F7); "motion" -> Blue; else -> null } ?: continue
+                drawCircle(color, radius = if (a.optString("type") == "motion") 3.dp.toPx() else 5.dp.toPx(), center = Offset(x, size.height / 2))
+            }
+        }
+        Row(Modifier.fillMaxWidth()) {
+            listOf("0h", "6h", "12h", "18h", "24h").forEachIndexed { i, t ->
+                Text(t, fontSize = 10.sp, color = palette.muted, modifier = Modifier.weight(1f),
+                    textAlign = if (i == 0) TextAlign.Start else if (i == 4) TextAlign.End else TextAlign.Center)
             }
         }
     }
 }
 
+private data class Look(val icon: ImageVector, val tint: Color, val bg: Color)
+
 @Composable
-private fun ActivityRow(hub: Hub, a: JSONObject, onOpen: () -> Unit) {
-    val type = a.optString("type")
-    val (icon, tint, bg) = when (type) {
-        "motion" -> Triple(Icons.AutoMirrored.Outlined.DirectionsWalk, Blue, palette.soft)
-        "person" -> Triple(Icons.AutoMirrored.Outlined.DirectionsWalk, Orange, Color(0x22F97316))
-        "online" -> Triple(Icons.Outlined.Videocam, Green, Color(0x2222C55E))
-        "offline" -> Triple(Icons.Outlined.VideocamOff, palette.muted, palette.line)
-        "night" -> Triple(Icons.Outlined.DarkMode, Blue, palette.soft)
-        "light" -> Triple(Icons.Outlined.Lightbulb, Blue, palette.soft)
-        else -> Triple(Icons.Outlined.Shield, Blue, palette.soft)
-    }
+private fun look(type: String): Look = when (type) {
+    "person" -> Look(Icons.AutoMirrored.Outlined.DirectionsWalk, Orange, Color(0x22F97316))
+    "animal" -> Look(Icons.Outlined.Pets, Color(0xFFA855F7), Color(0x22A855F7))
+    "motion" -> Look(Icons.Outlined.Waves, Blue, palette.soft)
+    "online" -> Look(Icons.Outlined.Videocam, Green, Color(0x2222C55E))
+    "offline" -> Look(Icons.Outlined.VideocamOff, palette.muted, palette.line)
+    "night" -> Look(Icons.Outlined.DarkMode, Blue, palette.soft)
+    "light" -> Look(Icons.Outlined.Lightbulb, Blue, palette.soft)
+    "quality" -> Look(Icons.Outlined.Wifi, Orange, Color(0x22F97316))
+    "privacy" -> Look(Icons.Outlined.VisibilityOff, palette.muted, palette.line)
+    else -> Look(Icons.Outlined.Shield, Blue, palette.soft)
+}
+
+/** "Movimento detectado · 5 vezes até 14:45" for grouped movements. */
+private fun detailLine(a: JSONObject): String {
+    val base = "${clock.format(Date(a.optLong("at")))} · ${a.optString("camera")}"
+    val count = a.optInt("count", 1)
+    return if (count > 1 && a.has("until")) "$base · $count vezes até ${clock.format(Date(a.optLong("until")))}" else base
+}
+
+@Composable
+private fun ActivityRow(hub: Hub, a: JSONObject, isNew: Boolean, onOpen: () -> Unit) {
+    val l = look(a.optString("type"))
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onOpen).padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        IconBubble(icon, tint, bg, size = 42)
+        Box {
+            IconBubble(l.icon, l.tint, l.bg, size = 42)
+            if (isNew) Box(Modifier.size(10.dp).align(Alignment.TopEnd).background(Orange, CircleShape))
+        }
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
-            Text(a.optString("text"), fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text("${whenText(a.optLong("at"))} · ${a.optString("camera")}", fontSize = 12.sp, color = palette.muted)
+            Text(a.optString("text"), fontSize = 14.sp, fontWeight = if (isNew) FontWeight.Bold else FontWeight.Medium)
+            Text(detailLine(a), fontSize = 12.sp, color = palette.muted)
         }
         a.optString("thumb").takeIf { it.isNotEmpty() && it != "null" }?.let { name ->
             val thumb = rememberPicture(hub, hub.thumbUrl(name))
             Box(Modifier.size(width = 64.dp, height = 42.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFF0B0F17))) {
                 thumb?.let { Image(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+            }
+        }
+    }
+}
+
+/** The activity big: its picture with where the person was, when, and a way to see the camera now. */
+@Composable
+private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive: () -> Unit) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
+        Column(Modifier.fillMaxWidth().card(palette, 20.dp).padding(14.dp)) {
+            a.optString("thumb").takeIf { it.isNotEmpty() && it != "null" }?.let { name ->
+                val pic = rememberPicture(hub, hub.thumbUrl(name))
+                val box = a.optJSONArray("box")
+                Box(Modifier.fillMaxWidth().aspectRatio(pic?.let { it.width.toFloat() / it.height } ?: 0.9f).clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFF0B0F17))) {
+                    pic?.let { Image(it, null, contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize()) }
+                    if (box != null) Canvas(Modifier.fillMaxSize()) {
+                        val color = if (a.optString("type") == "animal") Color(0xFFA855F7) else Orange
+                        drawRect(color, Offset(box.optDouble(0).toFloat() * size.width, box.optDouble(1).toFloat() * size.height),
+                            Size(box.optDouble(2).toFloat() * size.width, box.optDouble(3).toFloat() * size.height), style = Stroke(2.5.dp.toPx()))
+                    }
+                }
+            }
+            Text(a.optString("text"), fontWeight = FontWeight.SemiBold, fontSize = 17.sp, modifier = Modifier.padding(top = 12.dp))
+            Text("${whenText(a.optLong("at"))} · ${a.optString("camera")}" +
+                (a.optInt("count", 1).takeIf { it > 1 }?.let { " · $it vezes até ${clock.format(Date(a.optLong("until")))}" } ?: ""),
+                color = palette.muted, fontSize = 13.sp)
+            if (a.optBoolean("alert")) Text("Proteção estava ativada: o celular avisou.", color = palette.muted, fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp))
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onClose) { Text("Fechar", color = palette.muted) }
+                Button(onClick = onLive, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Ver ao vivo agora") }
             }
         }
     }
@@ -511,15 +672,16 @@ fun SettingsScreen(onOpen: (Screen) -> Unit) {
     Page {
         PageTitle("Ajustes", "Personalize e gerencie seu sistema")
         Column(Modifier.fillMaxWidth().card(palette)) {
-            ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos e vistoria", onClick = { onOpen(Screen.Features) })
-            ListRow(Icons.Outlined.Notifications, "Notificações", "Alertas e avisos do sistema", onClick = { onOpen(Screen.Soon("Notificações")) })
+            ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos, zonas e vistoria", onClick = { onOpen(Screen.Features) })
+            ListRow(Icons.Outlined.Notifications, "Proteção e avisos", "Avisos no celular, horário, resumo do dia", onClick = { onOpen(Screen.Protection) })
+            ListRow(Icons.Outlined.Group, "Família e aparelhos", "Quem tem acesso às câmeras", onClick = { onOpen(Screen.Family) })
             ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Soon("Armazenamento")) })
         }
         Spacer(Modifier.height(14.dp))
         Column(Modifier.fillMaxWidth().card(palette)) {
             ListRow(Icons.Outlined.Palette, "Aparência", "Tema claro/escuro", onClick = { onOpen(Screen.Appearance) })
             ListRow(Icons.Outlined.Lock, "Privacidade", "Dados e permissões", onClick = { onOpen(Screen.Privacy) })
-            ListRow(Icons.Outlined.Wifi, "Conexão", "Status da rede e dispositivos", onClick = { onOpen(Screen.System) })
+            ListRow(Icons.Outlined.Wifi, "Conexão", "Status, e ver de fora de casa", onClick = { onOpen(Screen.System) })
         }
         Spacer(Modifier.height(20.dp))
     }
@@ -574,7 +736,7 @@ fun SoonScreen(title: String, onBack: () -> Unit) {
 // MARK: - Sistema
 
 @Composable
-fun SystemScreen(live: Live, onBack: () -> Unit, onLeave: () -> Unit) {
+fun SystemScreen(live: Live, prefs: android.content.SharedPreferences, onBack: () -> Unit, onLeave: () -> Unit) {
     Page {
         TopBar("", null, onBack)
         Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -603,6 +765,28 @@ fun SystemScreen(live: Live, onBack: () -> Unit, onLeave: () -> Unit) {
                 Text(live.hub?.root?.removePrefix("http://") ?: "—", color = palette.muted, fontSize = 13.sp)
             })
         }
+        // From outside the house: the computer's address on a private network that reaches it (Tailscale, a VPN)
+        var remote by remember { mutableStateOf(prefs.getString("remote", "") ?: "") }
+        var remoteNote by remember { mutableStateOf<String?>(null) }
+        val scope = rememberCoroutineScope()
+        Text("Ver de fora de casa", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, modifier = Modifier.padding(top = 20.dp))
+        Text("Fora do Wi-Fi de casa, o app tenta este endereço do computador (por exemplo o do Tailscale, 100.x.x.x:8787).",
+            color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(remote, { remote = it }, singleLine = true, modifier = Modifier.weight(1f), placeholder = { Text("100.117.117.73:8787") },
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
+            TextButton(onClick = {
+                val a = remote.trim().removePrefix("http://").trimEnd('/')
+                if (a.isEmpty()) { prefs.edit().remove("remote").apply(); remoteNote = "Sem endereço de fora."; return@TextButton }
+                val root = "http://" + if (':' in a) a else "$a:8787"
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) { runCatching { live.hub!!.at(root).screen() }.isSuccess }
+                    prefs.edit().putString("remote", root).apply()
+                    remoteNote = if (ok) "Salvo: o computador respondeu nesse endereço." else "Salvo, mas o computador não respondeu agora nesse endereço."
+                }
+            }) { Text("Salvar", color = Blue) }
+        }
+        remoteNote?.let { Text(it, color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp)) }
         Spacer(Modifier.height(20.dp))
         Row(Modifier.fillMaxWidth().card(palette).clickable(onClick = onLeave).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.AutoMirrored.Outlined.Logout, null)
@@ -620,7 +804,7 @@ private val STATES = mapOf(
 )
 
 @Composable
-fun FeaturesScreen(live: Live, onBack: () -> Unit) {
+fun FeaturesScreen(live: Live, onBack: () -> Unit, onZones: () -> Unit) {
     val hub = live.hub ?: return
     var profile by remember { mutableStateOf<JSONObject?>(null) }
     var checking by remember { mutableStateOf(false) }
@@ -645,6 +829,15 @@ fun FeaturesScreen(live: Live, onBack: () -> Unit) {
                             .onSuccess { live.info = it; note = "Nome salvo." }.onFailure { note = "Não deu: ${it.message}" }
                     }
                 }) { Text("Salvar", color = Blue) }
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 14.dp).card(palette).clickable(onClick = onZones).padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                IconBubble(Icons.Outlined.CropFree, size = 36)
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text("Zonas para ignorar", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text("Marque a TV, o ventilador… o que se mexe ali não conta", color = palette.muted, fontSize = 12.sp)
+                }
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = palette.muted)
             }
             PageTitle("O que a câmera faz", "${caps.count { it.optString("status") == "ok" }} recursos conferidos")
             Button(enabled = !checking, onClick = {
@@ -787,7 +980,7 @@ fun LetInScreen(root: String, onKey: (String) -> Unit, onBack: () -> Unit) {
             label = { Text("Senha") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
         Button(onClick = {
             scope.launch {
-                withContext(Dispatchers.IO) { runCatching { Hub.login(root, password) } }
+                withContext(Dispatchers.IO) { runCatching { Hub.login(root, password, "Celular " + Build.MODEL) } }
                     .onSuccess(onKey).onFailure { status = it.message ?: "não deu" }
             }
         }, colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) {

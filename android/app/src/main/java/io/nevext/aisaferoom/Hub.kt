@@ -59,6 +59,33 @@ class Hub(val root: String, val key: String?) {
     /** Names the camera ("Quarto"). */
     fun rename(name: String): JSONObject = json("$base/api/perfil", JSONObject().put("name", name).toString())
 
+    /** Areas the AI ignores (the TV, a fan): rectangles x, y, width, height from 0 to 1 of the whole picture. */
+    fun setZones(zones: List<FloatArray>): JSONObject =
+        json("$base/api/perfil", JSONObject().put("zones", JSONArray(zones.map { z -> JSONArray(z.map { it.toDouble() }) })).toString())
+
+    /** Protection (away mode): on, and its schedule. */
+    fun setProtection(on: Boolean): JSONObject = json("$base/api/protection", JSONObject().put("on", on).toString())
+    fun setProtectionSchedule(enabled: Boolean, on: String, off: String): JSONObject = json("$base/api/protection",
+        JSONObject().put("schedule", JSONObject().put("enabled", enabled).put("on", on).put("off", off)).toString())
+
+    /** Privacy mode: the camera covers its own picture and the AI stops looking. */
+    fun setPrivacy(on: Boolean): JSONObject {
+        val reply = json("$base/api/privacy", JSONObject().put("on", on).toString())
+        if (!reply.optBoolean("ok")) throw IOException(reply.optString("error", "não deu"))
+        return reply
+    }
+
+    /** The phones, TVs and browsers let in, each with its own access. */
+    fun devices(): JSONArray = json("$base/api/devices").optJSONArray("devices") ?: JSONArray()
+    fun removeDevice(id: String): JSONArray = json("$base/api/devices/remove", JSONObject().put("id", id).toString()).optJSONArray("devices") ?: JSONArray()
+
+    /** Who asked to be let in (a new phone, a TV) and waits for someone to Allow. */
+    fun pendingAccess(): JSONArray = json("$base/api/access/pending").optJSONArray("requests") ?: JSONArray()
+    fun answerAccess(id: String, allow: Boolean) { json("$base/api/access/answer", JSONObject().put("id", id).put("allow", allow).toString()) }
+
+    /** The same computer at another address (from outside the house), keeping this phone's access. */
+    fun at(otherRoot: String) = Hub(otherRoot, key)
+
     /** Raw bytes of a picture (snapshot, thumbnail). */
     fun bytes(url: String): ByteArray {
         val c = open(url, null, 15_000)
@@ -115,9 +142,9 @@ class Hub(val root: String, val key: String?) {
             return found.values.toList()
         }
 
-        /** Signs in with camera-ai's password; returns the key. */
-        fun login(root: String, password: String): String {
-            val reply = json("$root/api/login", JSONObject().put("password", password).toString(), allowError = true)
+        /** Signs in with camera-ai's password; returns the key (this phone's own, under its name). */
+        fun login(root: String, password: String, name: String): String {
+            val reply = json("$root/api/login", JSONObject().put("password", password).put("name", name).toString(), allowError = true)
             if (!reply.optBoolean("ok")) throw IOException(reply.optString("error", "senha errada"))
             return reply.getString("key")
         }
