@@ -59,8 +59,15 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       câmera", "vire para a esquerda/direita", "levante o queixo", com o rosto marcado e progresso), YuNet + SFace
       (OpenCV Zoo, Apache 2.0) no PC (`server/faces.mjs`, `server\get-faces.ps1`). A visita ganha o nome ("Deivid no
       Quarto") ou vira "Pessoa desconhecida". Rostos só no PC (`server/perfis/rostos.json`), apagáveis. Só reconhece
-      quem olha para a câmera razoavelmente perto. Falta: confirmar "quem é" nas atividades (aprender com o tempo),
-      avisar só de desconhecidos, e o corpo/roupa para seguir a mesma pessoa de costas.
+      quem olha para a câmera razoavelmente perto.
+- [x] **"Quem é?" nas atividades:** o rosto desconhecido fica guardado na visita (até 4 pessoas, 7 dias); tocar
+      nele e dizer quem é junta as fotos às da pessoa (até 30 aprendidas, as do cadastro nunca saem), ou cadastra
+      alguém novo (com consentimento), ou "Não conheço". As outras visitas com o mesmo rosto ganham o nome sozinhas.
+- [x] **Proteção "só pessoas desconhecidas":** espera o rosto; conhecido não avisa, desconhecido avisa na hora, e
+      sem ver o rosto em 20 s avisa do mesmo jeito (o celular recebe o aviso atrasado como `alertNow`).
+- [x] **Pela roupa:** quando o rosto diz quem é, as cores do tronco e das pernas ficam anotadas; mais tarde, sem
+      rosto, a roupa parecida (no mesmo dia, só com cor: o infravermelho é cinza) dá "Provavelmente Deivid". Não
+      cala o aviso da Proteção, só dá nome. O limite (0,8) ainda não foi ajustado com imagens reais.
 - [x] **Identificação:** pessoa vira visita (com quantas juntas), animal pede nota 0,8 em 8 de 10 análises, "Tem
       animais em casa", "Foi engano" (`/api/activity/forget`).
 - [x] **Perfil de cada câmera** (`server/perfil.mjs`, `server/perfis/<serial>.json`, `/api/perfil`): o que ela

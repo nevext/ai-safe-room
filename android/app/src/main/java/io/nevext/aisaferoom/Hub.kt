@@ -80,8 +80,23 @@ class Hub(val root: String, val key: String?) {
     fun cancelEnroll() { json("$base/api/faces/enroll", JSONObject().put("cancel", true).toString()) }
     fun removeFace(id: String): JSONObject = json("$base/api/faces/remove", JSONObject().put("id", id).toString())
 
+    /**
+     * "Quem é?": whose is an unknown face of a visit. [person] (an id) learns it; [name] with [consent] registers someone
+     * new; [nobody] says nobody from home. Returns the visit as it is now.
+     */
+    fun whoIs(at: Long, face: Int, person: String? = null, name: String? = null, consent: Boolean = false, nobody: Boolean = false): JSONObject {
+        val body = JSONObject().put("at", at).put("face", face)
+        person?.let { body.put("person", it) }
+        name?.let { body.put("name", it).put("consent", consent) }
+        if (nobody) body.put("nobody", true)
+        val reply = json("$base/api/activity/who", body.toString())
+        if (!reply.optBoolean("ok")) throw IOException(reply.optString("error", "não deu"))
+        return reply.getJSONObject("item")
+    }
+
     /** Protection (away mode): on, and its schedule. */
     fun setProtection(on: Boolean): JSONObject = json("$base/api/protection", JSONObject().put("on", on).toString())
+    fun setOnlyUnknown(on: Boolean): JSONObject = json("$base/api/protection", JSONObject().put("onlyUnknown", on).toString())
     fun setProtectionSchedule(enabled: Boolean, on: String, off: String): JSONObject = json("$base/api/protection",
         JSONObject().put("schedule", JSONObject().put("enabled", enabled).put("on", on).put("off", off)).toString())
 

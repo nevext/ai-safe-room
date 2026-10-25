@@ -21,7 +21,7 @@ import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
 import { createClips } from './clips.mjs';
 import { createProfiles } from './perfil.mjs';
-import { loadFaces, createPeople, pose } from './faces.mjs';
+import { loadFaces, createPeople, pose, similarity, outfit, outfitSimilarity, hasColor, SAME_PERSON } from './faces.mjs';
 
 const PORT = 8787;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -855,6 +855,11 @@ async function logActivity(type, text, { thumb = false, box = null, label = null
   // Movimento: diz se a IA via alguém junto (a câmera avisa de qualquer coisa que se mexe: cortina, luz da TV)
   if (type === 'motion' && now - presence.person.lastSeen < 60000) { entry.withPerson = true; entry.text = 'Movimento com pessoa'; }
   if (type === 'person' || type === 'animal') entry.alert = protection.on;   // com a Proteção ligada, avisa no celular
+  // "Só desconhecidos": espera o rosto. Conhecido não avisa; desconhecido avisa na hora; sem ver o rosto em 20 s, avisa
+  if (type === 'person' && entry.alert && protection.onlyUnknown && faces && people.list().length) {
+    entry.alert = false; entry.waiting = true;
+    setTimeout(() => decideAlert(entry), 20000);
+  }
   if (thumb) entry.thumb = await activityThumb(type === 'person' || type === 'animal');
   activity = [...activity, entry].slice(-500);
   try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
@@ -893,8 +898,10 @@ async function aiFrameThumb({ frame, w, h }) {
 // Miniaturas com mais de 7 dias saem
 setInterval(() => {
   const old = Date.now() - 7 * 864e5;
-  for (const f of fs.readdirSync(ACT_DIR)) if (/^\d+\.jpg$/.test(f) && +f.slice(0, -4) < old) fs.rm(path.join(ACT_DIR, f), () => {});
+  for (const f of fs.readdirSync(ACT_DIR)) if (/^\d+(-f\d+)?\.jpg$/.test(f) && parseInt(f) < old) fs.rm(path.join(ACT_DIR, f), () => {});
   activity = activity.filter(a => a.at > Date.now() - 30 * 864e5);
+  for (const at of Object.keys(visitFaces)) if (+at < old) delete visitFaces[at];
+  saveVisitFaces();
 }, 3600e3).unref();
 // Pessoa ou animal: uma VISITA, não uma aparição. Enquanto continua por perto (até 10 min sem ser visto) é o mesmo
 // evento, que vai até a última vez visto e guarda quantas pessoas apareceram juntas. Antes, quem ficava parado atrás
@@ -922,10 +929,11 @@ function arrivals(r) {
     const count = PROFILE.lenses?.layout === 'stacked-vertical'
       ? Math.max(found.filter(half).length, found.filter(it => !half(it)).length) : found.length;
     const name = kind === 'person' ? (count > 1 ? `${count} pessoas` : 'Pessoa') : found[0].label?.pt || 'Animal';
+    if (kind === 'person') lastPeople = { items: found, at: now };
     const v = p.visit;
     if (v && !v.pending && now - p.lastSeen < VISIT_GAP) {
       v.until = now;
-      if (count > (v.people || 1)) { v.people = count; v.text = `${name} no ${where}`; p.savedAt = 0; }
+      if (count > (v.people || 1)) { v.people = count; v.text = kind === 'person' ? visitText(v) : `${name} no ${where}`; p.savedAt = 0; }
       // Guarda e avisa as telas no máximo a cada 30 s (a visita pode durar horas)
       if (now - p.savedAt > 30000) {
         p.savedAt = now;
@@ -949,6 +957,8 @@ function forgetActivity(at, type) {
   for (const k of ['person', 'animal']) if (presence[k].visit === a) presence[k].visit = null;
   try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
   if (a.thumb) fs.rm(path.join(ACT_DIR, a.thumb), () => {});
+  for (const f of a.faces || []) fs.rm(path.join(ACT_DIR, f.img), () => {});
+  delete visitFaces[a.at]; saveVisitFaces();
   perfil?.event('engano', `Engano marcado: ${a.text}`, { kind: a.type, label: a.label, box: a.box });
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Atividade marcada como engano: ${a.text}`);
   return { ok: true };
@@ -968,7 +978,7 @@ function ignoreZones(r) {
 // Ligada: pessoa ou animal vira aviso no celular. Desligada (gente em casa): as atividades ficam, sem aviso. Pode
 // ligar e desligar sozinha por horário.
 const protection = (() => {
-  try { return { on: false, schedule: null, ...JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).protection }; } catch { return { on: false, schedule: null }; }
+  try { return { on: false, schedule: null, onlyUnknown: false, ...JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).protection }; } catch { return { on: false, schedule: null, onlyUnknown: false }; }
 })();
 function setProtection(on, why = '') {
   if (protection.on === !!on) return;
@@ -1048,7 +1058,7 @@ async function serveCameraThumb(res) {
 }
 
 function serveThumb(res, name) {
-  if (!/^\d+\.jpg$/.test(name)) return json(res, 404, { error: 'não encontrado' });
+  if (!/^\d+(-f\d+)?\.jpg$/.test(name)) return json(res, 404, { error: 'não encontrado' });
   fs.readFile(path.join(ACT_DIR, name), (e, data) => {
     if (e) return json(res, 404, { error: 'não encontrado' });
     res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=604800' });
@@ -1168,44 +1178,176 @@ async function finishEnroll() {
   perfil?.event('rosto', `Pessoa conhecida cadastrada: ${person.name}`);
   syncFaces();
 }
-function saveAvatar(id, aligned) {
+function saveAvatar(id, aligned) { return saveFace(path.join(AVATARS, id + '.jpg'), aligned); }
+function saveFace(file, aligned) {
   return new Promise(ok => {
-    const ff = spawn(FFMPEG, ['-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '112x112', '-i', 'pipe:0', '-q:v', '4', '-y', path.join(AVATARS, id + '.jpg')]);
+    const ff = spawn(FFMPEG, ['-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '112x112', '-i', 'pipe:0', '-q:v', '4', '-y', file]);
     ff.on('close', ok); ff.on('error', ok); ff.stdin.end(Buffer.from(aligned));
   });
 }
 
-// Dar nome à visita: o rosto visto bate com alguém conhecido? Desconhecido só depois de ver bem o rosto 3 vezes
+// Dar nome à visita: o rosto visto bate com alguém conhecido? Desconhecido só depois de ver bem o rosto 3 vezes.
+// O rosto desconhecido fica guardado na visita (até 4 pessoas diferentes, 10 fotos cada) para o "Quem é?" do app.
+// Quem tem nome pelo rosto deixa a roupa anotada; sem rosto, a roupa do mesmo dia dá um "Provavelmente".
+let lastPeople = { items: [], at: 0 };
+const outfits = new Map();   // id da pessoa → { look, at }: a roupa da última vez que o rosto disse quem era
+const OUTFIT_HOURS = 12, SAME_OUTFIT = 0.8;
 async function recognizeFrame(rgb, w, h) {
   const v = presence.person.visit;
   if (!v || v.pending) return;
+  const now = Date.now();
+  // As caixas das pessoas (da IA, agora há pouco), só com cor: no infravermelho a roupa não diz nada
+  const bodies = now - lastPeople.at < 2000 && hasColor(rgb) ? lastPeople.items.map(it => hiresBox(it.box, w, h)) : [];
   const found = (await faces.detect(rgb, w, h, 0.8)).filter(f => f.box[2] >= 48).slice(0, 3);
   let changed = false;
   for (const face of found) {
-    const { vector } = await faces.embed(rgb, w, h, face);
+    const { vector, aligned } = await faces.embed(rgb, w, h, face);
     const m = people.match(vector);
     if (m.person) {
       people.seen(m.person.id);
+      if (!(v.names || []).includes(m.person.name)) changed = true;
       v.names = [...new Set([...(v.names || []), m.person.name])];
       v.known = [...new Set([...(v.known || []), m.person.id])];
-      changed = true;
+      const cx = face.box[0] + face.box[2] / 2, cy = face.box[1] + face.box[3] / 2;
+      const body = bodies.find(b => cx >= b[0] && cx <= b[0] + b[2] && cy >= b[1] && cy <= b[1] + b[3] * 0.4);
+      const look = body && outfit(rgb, w, h, body);
+      if (look) outfits.set(m.person.id, { look, at: now });
     } else {
       v.unknownFaces = (v.unknownFaces || 0) + 1;
-      changed = v.unknownFaces === 3;
+      if (Math.abs(pose(face.points).yaw) < 0.3 && await keepVisitFace(v, vector, aligned)) changed = true;
+      if (v.unknownFaces === 3) changed = true;
     }
   }
+  // Ninguém com nome pelo rosto depois de 15 s: a roupa parece com a de alguém visto hoje?
+  if (!v.names?.length && !v.guess && now - v.at > 15000 && bodies.length) {
+    let best = null, score = 0;
+    for (const b of bodies) {
+      const look = outfit(rgb, w, h, b);
+      if (!look) break;
+      for (const [id, o] of outfits) {
+        if (now - o.at > OUTFIT_HOURS * 3600e3) continue;
+        const sim = outfitSimilarity(look, o.look);
+        if (sim > score) { score = sim; best = id; }
+      }
+    }
+    const p = score >= SAME_OUTFIT && people.list().find(p => p.id === best);
+    if (p) { v.guess = p.name; changed = true; console.log(`${new Date().toLocaleTimeString('pt-BR')} Rostos: pela roupa, provavelmente ${p.name} (${score.toFixed(2)})`); }
+  }
   if (!changed) return;
-  const where = perfil?.data.name || 'Câmera';
-  const names = v.names || [];
-  v.text = names.length ? `${names.join(' e ')} no ${where}` + (v.unknownFaces >= 3 ? ' (com alguém desconhecido)' : '')
-    : v.unknownFaces >= 3 ? `Pessoa desconhecida no ${where}` : v.text;
-  try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
+  v.text = visitText(v);
+  if (protection.on && isUnknown(v) && !v.alert) return decideAlert(v);
+  if (v.waiting && v.names?.length && !isUnknown(v)) v.waiting = false;   // só gente conhecida: sem aviso
+  saveActivity();
   broadcast({ type: 'activity', update: true, item: v });
+}
+const isUnknown = (v) => (v.unknownFaces || 0) >= 3 && ((v.faces || []).length > 0 || (v.strangers || 0) > 0);
+function visitText(v) {
+  const where = perfil?.data.name || 'Câmera', names = v.names || [];
+  if (names.length) return `${names.join(' e ')} no ${where}` + (isUnknown(v) ? ' (com alguém desconhecido)' : '');
+  if (isUnknown(v)) return `Pessoa desconhecida no ${where}`;
+  if (v.guess) return `Provavelmente ${v.guess} no ${where}`;
+  return `${(v.people || 1) > 1 ? `${v.people} pessoas` : 'Pessoa'} no ${where}`;
+}
+function saveActivity() { try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {} }
+// A hora de avisar com a Proteção: desconhecido visto, ou ("só desconhecidos") 20 s sem ver um rosto conhecido
+function decideAlert(v) {
+  if (v.alert || !protection.on) return;
+  const wasWaiting = v.waiting;
+  v.waiting = false;
+  if (wasWaiting && v.names?.length && !isUnknown(v)) return;
+  if (!wasWaiting && !isUnknown(v)) return;
+  v.alert = true;
+  saveActivity();
+  broadcast({ type: 'activity', update: true, alertNow: true, item: v });   // o celular avisa agora
+}
+// A caixa da IA (0–1 do quadro inteiro) na imagem grande (o quadro reduzido no canto de cima, com faixa preta ao lado)
+function hiresBox(box, w, h) {
+  const prof = videoPick.using === 'sub' ? subProfile() : mainProfile();
+  const aspect = prof?.width && prof?.height ? prof.width / prof.height : w / h;
+  const sw = aspect < w / h ? h * aspect : w, sh = aspect < w / h ? h : w / aspect;
+  return [box[0] * sw, box[1] * sh, box[2] * sw, box[3] * sh];
+}
+
+// Os rostos desconhecidos de cada visita: { [at da visita]: [{ i, vectors }] }, 7 dias (as fotos: <at>-f<i>.jpg)
+const VISIT_FACES = path.join(ACT_DIR, 'rostos-visitas.json');
+const visitFaces = (() => { try { return JSON.parse(fs.readFileSync(VISIT_FACES, 'utf8')); } catch { return {}; } })();
+function saveVisitFaces() { try { fs.writeFileSync(VISIT_FACES, JSON.stringify(visitFaces)); } catch {} }
+async function keepVisitFace(v, vector, aligned) {
+  const store = visitFaces[v.at] ||= [];
+  const same = store.find(c => similarity(c.vectors[0], vector) >= SAME_PERSON);
+  if (same) { if (same.vectors.length < 10) { same.vectors.push(vector); saveVisitFaces(); } return false; }
+  if (store.length >= 4) return false;
+  const i = store.reduce((n, c) => Math.max(n, c.i + 1), 0);
+  store.push({ i, vectors: [vector] });
+  saveVisitFaces();
+  const img = `${v.at}-f${i}.jpg`;
+  await saveFace(path.join(ACT_DIR, img), aligned);
+  v.faces = [...(v.faces || []), { i, img }];
+  return true;
+}
+
+/**
+ * "Quem é?" (POST /api/activity/who): a pessoa diz de quem é um rosto desconhecido da visita. { at, face, person }
+ * junta as fotos às dessa pessoa; { at, face, name, consent } cadastra uma pessoa nova com elas; { at, face, nobody }
+ * diz que não conhece (continua desconhecido, sai da pergunta). Depois, os rostos guardados de outras visitas que
+ * agora batem ganham o nome sozinhos.
+ */
+async function whoIs({ at, face, person, name, consent, nobody }) {
+  const v = activity.find(a => a.at === +at && a.type === 'person');
+  if (!v) return { ok: false, error: 'atividade não encontrada' };
+  const c = (visitFaces[v.at] || []).find(c => c.i === +face);
+  if (!c) return { ok: false, error: 'esse rosto não está mais guardado' };
+  const img = (v.faces || []).find(f => f.i === c.i)?.img;
+  let p = null;
+  if (nobody) v.strangers = (v.strangers || 0) + 1;
+  else if (person) {
+    p = people.list().find(p => p.id === String(person));
+    if (!p) return { ok: false, error: 'pessoa não encontrada' };
+    people.learn(p.id, c.vectors);
+  } else {
+    if (!faces) return { ok: false, error: 'os modelos de rosto não estão instalados' };
+    if (!consent) return { ok: false, error: 'a pessoa precisa concordar com o cadastro do rosto' };
+    const n = String(name || '').trim();
+    if (!n) return { ok: false, error: 'falta o nome' };
+    p = people.add(n, c.vectors, true);
+    if (img) fs.copyFileSync(path.join(ACT_DIR, img), path.join(AVATARS, p.id + '.jpg'));
+    perfil?.event('rosto', `Pessoa conhecida cadastrada pelas atividades: ${p.name}`);
+    syncFaces();
+  }
+  dropVisitFace(v, c.i);
+  if (p) nameVisit(v, p); else v.text = visitText(v);
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Rostos: "Quem é?" → ${p ? p.name : 'não conhece'}`);
+  // As outras visitas guardadas: o rosto que agora bate com alguém ganha o nome
+  if (p) for (const [vat, list] of Object.entries(visitFaces)) {
+    const other = activity.find(a => a.at === +vat && a.type === 'person');
+    if (!other) continue;
+    for (const oc of [...list]) {
+      if (people.match(oc.vectors[0]).person?.id !== p.id) continue;
+      dropVisitFace(other, oc.i); nameVisit(other, p);
+      if (other !== v) broadcast({ type: 'activity', update: true, item: other });
+    }
+  }
+  saveVisitFaces();
+  saveActivity();
+  broadcast({ type: 'activity', update: true, item: v });
+  return { ok: true, item: v };
+}
+function dropVisitFace(v, i) {
+  visitFaces[v.at] = (visitFaces[v.at] || []).filter(c => c.i !== i);
+  const f = (v.faces || []).find(f => f.i === i);
+  if (f) fs.rm(path.join(ACT_DIR, f.img), () => {});
+  v.faces = (v.faces || []).filter(f => f.i !== i);
+}
+function nameVisit(v, p) {
+  v.names = [...new Set([...(v.names || []), p.name])];
+  v.known = [...new Set([...(v.known || []), p.id])];
+  if (!v.faces.length && !v.strangers) v.unknownFaces = 0;
+  v.text = visitText(v);
 }
 
 function facesInfo() {
   return { ok: true, available: !!faces, enrolling: enrollStatus(),
-    people: people.list().map(p => ({ id: p.id, name: p.name, samples: p.samples.length, consentAt: p.consentAt, lastSeen: p.lastSeen,
+    people: people.list().map(p => ({ id: p.id, name: p.name, samples: p.samples.length + (p.learned?.length || 0), consentAt: p.consentAt, lastSeen: p.lastSeen,
       avatar: fs.existsSync(path.join(AVATARS, p.id + '.jpg')) ? `/api/faces/avatar/${p.id}.jpg` : null })) };
 }
 function serveAvatar(res, file) {
@@ -1416,7 +1558,7 @@ async function screenInfo() {
     controls: await screenControls().catch(() => []),
     motion: { active: motionWatch.active, last: motion.last },
     events: clips ? { list: '/api/events', recording: clipsOn.wanted } : null,
-    protection: { on: protection.on, schedule: protection.schedule },
+    protection: { on: protection.on, schedule: protection.schedule, onlyUnknown: !!protection.onlyUnknown },
     privacy: { on: privacy.on },
     quality: { level: quality.level.level, label: quality.level.level ? LEVELS[quality.level.level] : null, bufferMs: bufferMs(), vistoria: '/api/vistoria' },
   };
@@ -1776,6 +1918,7 @@ const server = http.createServer(async (req, res) => {
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
       case '/api/activity/forget': { const b = await readBody(req); return json(res, 200, forgetActivity(b.at, b.type)); }
+      case '/api/activity/who': return json(res, 200, await whoIs(await readBody(req)));
       case '/api/faces': return json(res, 200, facesInfo());
       case '/api/faces/enroll': {
         if (req.method === 'GET') return json(res, 200, enrollStatus());
@@ -1795,6 +1938,7 @@ const server = http.createServer(async (req, res) => {
           const b = await readBody(req);
           if (b.on != null) setProtection(b.on, 'pedido');
           if (b.schedule !== undefined) { protection.schedule = b.schedule; saveState(); }
+          if (b.onlyUnknown != null) { protection.onlyUnknown = !!b.onlyUnknown; saveState(); }
         }
         return json(res, 200, { ok: true, ...protection });
       }

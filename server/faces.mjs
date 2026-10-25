@@ -98,6 +98,50 @@ export function pose(points) {
   return { yaw: (nose[0] - mid[0]) / eyes, pitch: (nose[1] - mid[1]) / eyes };
 }
 
+// ---------- A roupa: reconhecer de costas, no mesmo dia ----------
+// Quando o rosto diz quem é, as cores da roupa (tronco e pernas) ficam guardadas; mais tarde, com a pessoa de costas,
+// a roupa parecida vira "Provavelmente Deivid". Só serve no mesmo dia (a roupa muda) e só com cor: à noite, no
+// infravermelho, tudo é cinza e a roupa não diz nada.
+const HUES = 8, SATS = 3, GRAYS = 4, BINS = HUES * SATS + GRAYS;
+
+/** Se a imagem tem cor (de dia, ou com luz) ou é do infravermelho (cinza): pela média de |R−G| + |G−B| numa amostra. */
+export function hasColor(rgb) {
+  let sum = 0, n = 0;
+  for (let i = 0; i + 2 < rgb.length; i += 3 * 211) { sum += Math.abs(rgb[i] - rgb[i + 1]) + Math.abs(rgb[i + 1] - rgb[i + 2]); n++; }
+  return n > 0 && sum / n > 6;
+}
+
+/** As cores da roupa dentro da caixa da pessoa ([x, y, l, a] em pixels): o tronco e as pernas. */
+export function outfit(rgb, w, h, box) {
+  const [bx, by, bw, bh] = box;
+  const parts = [[0.25, 0.6], [0.6, 0.95]].map(([top, bottom]) => {
+    const hist = new Float32Array(BINS);
+    let n = 0;
+    const x0 = Math.max(0, Math.round(bx + bw * 0.2)), x1 = Math.min(w, Math.round(bx + bw * 0.8));
+    const y0 = Math.max(0, Math.round(by + bh * top)), y1 = Math.min(h, Math.round(by + bh * bottom));
+    const step = Math.max(1, Math.round(Math.sqrt((x1 - x0) * (y1 - y0) / 4000)));
+    for (let y = y0; y < y1; y += step) for (let x = x0; x < x1; x += step) {
+      const i = (y * w + x) * 3, r = rgb[i], g = rgb[i + 1], b = rgb[i + 2];
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), sat = max ? (max - min) / max : 0;
+      n++;
+      if (sat < 0.2 || max < 40) { hist[HUES * SATS + Math.min(GRAYS - 1, Math.floor(max / 64))]++; continue; }
+      const hue = max === r ? ((g - b) / (max - min) + 6) % 6 : max === g ? (b - r) / (max - min) + 2 : (r - g) / (max - min) + 4;
+      hist[Math.min(HUES - 1, Math.floor(hue / 6 * HUES)) * SATS + Math.min(SATS - 1, Math.floor((sat - 0.2) / 0.8 * SATS))]++;
+    }
+    if (!n) return null;
+    for (let k = 0; k < BINS; k++) hist[k] /= n;
+    return Array.from(hist);
+  });
+  return parts.some(p => !p) ? null : parts;
+}
+
+/** Quanto duas roupas se parecem (0–1, Bhattacharyya média do tronco e das pernas). */
+export function outfitSimilarity(a, b) {
+  let sum = 0;
+  for (let p = 0; p < 2; p++) for (let k = 0; k < BINS; k++) sum += Math.sqrt(a[p][k] * b[p][k]);
+  return sum / 2;
+}
+
 function nms(faces, iou) {
   faces.sort((a, b) => b.score - a.score);
   const kept = [];
@@ -154,13 +198,19 @@ export function createPeople(file) {
     },
     remove(id) { const n = people.length; people = people.filter(p => p.id !== id); save(); return people.length < n; },
     rename(id, name) { const p = people.find(p => p.id === id); if (p) { p.name = String(name).slice(0, 40); save(); } return !!p; },
-    /** Mais uma foto confirmada ("esse é o Deivid"): ajuda a acertar com o tempo. Guarda no máximo 40. */
-    learn(id, vector) { const p = people.find(p => p.id === id); if (!p) return false; p.samples = [...p.samples, vector].slice(-40); save(); return true; },
+    /**
+     * Fotos confirmadas ("esse é o Deivid", nas atividades): ajudam a acertar com o tempo, com outras luzes e ângulos.
+     * Ficam à parte das do cadastro (que nunca saem), no máximo 30, as mais novas.
+     */
+    learn(id, vectors) {
+      const p = people.find(p => p.id === id); if (!p) return false;
+      p.learned = [...(p.learned || []), ...vectors].slice(-30); save(); return true;
+    },
     seen(id) { const p = people.find(p => p.id === id); if (p) { p.lastSeen = Date.now(); save(); } },
     /** Quem é: a pessoa com a foto mais parecida, se passar do limite do SFace. */
     match(vector) {
       let best = null, score = 0;
-      for (const p of people) for (const s of p.samples) {
+      for (const p of people) for (const s of [...p.samples, ...(p.learned || [])]) {
         const sim = similarity(vector, s);
         if (sim > score) { score = sim; best = p; }
       }

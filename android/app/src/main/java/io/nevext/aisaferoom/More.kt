@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Schedule
@@ -109,6 +110,16 @@ fun ProtectionScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
                 live.protectionOn) { on ->
                 scope.launch {
                     withContext(Dispatchers.IO) { runCatching { hub.setProtection(on); hub.screen() } }
+                        .onSuccess { live.info = it }.onFailure { note = "Não deu: ${it.message}" }
+                }
+            }
+            // Only unknowns: needs someone registered in Pessoas conhecidas
+            val onlyUnknown = live.info?.optJSONObject("protection")?.optBoolean("onlyUnknown") == true
+            SwitchRow(Icons.Outlined.Face, "Só pessoas desconhecidas",
+                if (onlyUnknown) "Quem foi cadastrado em Pessoas conhecidas não avisa. Sem ver o rosto em 20 s, avisa do mesmo jeito."
+                else "Avisa de qualquer pessoa", onlyUnknown) { on ->
+                scope.launch {
+                    withContext(Dispatchers.IO) { runCatching { hub.setOnlyUnknown(on); hub.screen() } }
                         .onSuccess { live.info = it }.onFailure { note = "Não deu: ${it.message}" }
                 }
             }

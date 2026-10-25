@@ -287,3 +287,91 @@ private fun EnrollVideo(live: Live, visible: Boolean) {
             ?: CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
     }
 }
+
+// MARK: - "Quem é?" (nas atividades)
+
+/**
+ * The unknown faces the camera saw in a visit: tap one and say who it is. The app learns it (more photos for that
+ * person, in other lights and angles) and gives the name to other visits with that face too.
+ */
+@Composable
+fun WhoIsFaces(hub: Hub, a: JSONObject, onChanged: (JSONObject) -> Unit) {
+    val unknown = a.optJSONArray("faces") ?: return
+    if (unknown.length() == 0) return
+    var asking by remember { mutableStateOf<JSONObject?>(null) }
+    Text("Quem é?", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, modifier = Modifier.padding(top = 14.dp))
+    Text("Toque no rosto e diga quem é: o app aprende a reconhecer.", color = palette.muted, fontSize = 12.sp)
+    Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        for (i in 0 until unknown.length()) {
+            val f = unknown.optJSONObject(i) ?: continue
+            val pic = rememberPicture(hub, hub.thumbUrl(f.optString("img")))
+            Box(Modifier.size(58.dp).clip(CircleShape).background(palette.soft).clickable { asking = f }, contentAlignment = Alignment.Center) {
+                if (pic != null) Image(pic, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else Icon(Icons.Outlined.Face, null, tint = Blue)
+            }
+        }
+    }
+    asking?.let { f -> WhoIsDialog(hub, a, f, onClose = { asking = null }, onDone = { asking = null; onChanged(it) }) }
+}
+
+@Composable
+private fun WhoIsDialog(hub: Hub, a: JSONObject, face: JSONObject, onClose: () -> Unit, onDone: (JSONObject) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var people by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var newName by remember { mutableStateOf("") }
+    var consent by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { runCatching { hub.faces() } }.onSuccess { info ->
+            val list = info.optJSONArray("people")
+            people = (0 until (list?.length() ?: 0)).mapNotNull { list?.optJSONObject(it) }
+        }
+    }
+    val answer = { call: () -> JSONObject ->
+        busy = true; note = null
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { call() } }
+                .onSuccess(onDone).onFailure { note = it.message; busy = false }
+        }
+    }
+    val at = a.optLong("at")
+    val i = face.optInt("i")
+    AlertDialog(onDismissRequest = onClose, confirmButton = {}, dismissButton = {
+        TextButton(onClick = onClose) { Text("Fechar", color = palette.muted) }
+    }, title = { Text("Quem é?") }, text = {
+        Column {
+            val pic = rememberPicture(hub, hub.thumbUrl(face.optString("img")))
+            Box(Modifier.size(96.dp).clip(RoundedCornerShape(16.dp)).background(palette.soft).align(Alignment.CenterHorizontally),
+                contentAlignment = Alignment.Center) {
+                if (pic != null) Image(pic, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            }
+            people.forEach { p ->
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp)).background(palette.soft)
+                    .clickable(enabled = !busy) { answer { hub.whoIs(at, i, person = p.optString("id")) } }
+                    .padding(12.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val avatar = p.optString("avatar").takeIf { it.isNotEmpty() && it != "null" }?.let { rememberPicture(hub, hub.base + it) }
+                    Box(Modifier.size(32.dp).clip(CircleShape).background(palette.card), contentAlignment = Alignment.Center) {
+                        if (avatar != null) Image(avatar, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        else Icon(Icons.Outlined.Face, null, tint = Blue, modifier = Modifier.size(18.dp))
+                    }
+                    Text(p.optString("name"), fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp))
+                }
+            }
+            Text("Outra pessoa", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 14.dp))
+            OutlinedTextField(newName, { newName = it.take(40) }, singleLine = true, label = { Text("Nome") },
+                modifier = Modifier.fillMaxWidth(), colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
+            Row(Modifier.clickable { consent = !consent }, verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(consent, { consent = it }, colors = CheckboxDefaults.colors(checkedColor = Blue))
+                Text("A pessoa concorda em ter o rosto reconhecido", fontSize = 12.sp)
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { answer { hub.whoIs(at, i, nobody = true) } }, enabled = !busy) { Text("Não conheço", color = Red) }
+                Spacer(Modifier.weight(1f))
+                Button(onClick = { answer { hub.whoIs(at, i, name = newName.trim(), consent = true) } },
+                    enabled = !busy && consent && newName.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Cadastrar") }
+            }
+            note?.let { Text("Não deu: $it", color = Red, fontSize = 12.sp) }
+        }
+    })
+}

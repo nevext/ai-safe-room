@@ -517,8 +517,10 @@ private fun dayTitle(at: Long): String {
 fun ActivityScreen(live: Live, onLive: () -> Unit) {
     val hub = live.hub ?: return
     var filter by remember { mutableStateOf(0) }
-    var opened by remember { mutableStateOf<JSONObject?>(null) }
+    // What's open is looked up again in the list: when the visit changes (a name, "Quem é?"), the detail follows
+    var openedKey by remember { mutableStateOf<Pair<Long, String>?>(null) }
     val all = (0 until live.activity.length()).mapNotNull { live.activity.optJSONObject(it) }
+    val opened = openedKey?.let { (at, type) -> all.find { it.optLong("at") == at && it.optString("type") == type } }
     val shown = FILTERS[filter].second.let { types -> if (types.isEmpty()) all else all.filter { it.optString("type") in types } }
     val today = all.filter { it.optLong("at") >= dayOf(System.currentTimeMillis()).timeInMillis }
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 20.dp)) {
@@ -548,15 +550,20 @@ fun ActivityScreen(live: Live, onLive: () -> Unit) {
                     modifier = Modifier.padding(top = 14.dp, bottom = 2.dp))
             }
             items(items, key = { "a" + it.optLong("at") + it.optString("type") }) { a ->
-                ActivityRow(hub, a, isNew = a.optLong("at") > live.seenAt && a.optString("type") in setOf("person", "animal")) { opened = a }
+                ActivityRow(hub, a, isNew = a.optLong("at") > live.seenAt && a.optString("type") in setOf("person", "animal")) { openedKey = a.optLong("at") to a.optString("type") }
             }
         }
         item { Spacer(Modifier.height(20.dp)) }
     }
     val scope = rememberCoroutineScope()
     opened?.let { a ->
-        ActivityDetail(hub, a, onClose = { opened = null }, onLive = { opened = null; onLive() }, onMistake = {
-            opened = null
+        ActivityDetail(hub, a, onClose = { openedKey = null }, onLive = { openedKey = null; onLive() }, onChanged = { item ->
+            live.activity = org.json.JSONArray().also { list ->
+                for (i in 0 until live.activity.length()) live.activity.optJSONObject(i)
+                    ?.let { list.put(if (it.optLong("at") == item.optLong("at") && it.optString("type") == item.optString("type")) item else it) }
+            }
+        }, onMistake = {
+            openedKey = null
             scope.launch {
                 withContext(Dispatchers.IO) { runCatching { hub.forget(a.optLong("at"), a.optString("type")) } }.onSuccess {
                     live.activity = org.json.JSONArray().also { list ->
@@ -660,7 +667,7 @@ private fun ActivityRow(hub: Hub, a: JSONObject, isNew: Boolean, onOpen: () -> U
 
 /** The activity big: its picture with where the person was, when, and a way to see the camera now. */
 @Composable
-private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive: () -> Unit, onMistake: () -> Unit) {
+private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive: () -> Unit, onChanged: (JSONObject) -> Unit, onMistake: () -> Unit) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
         Column(Modifier.fillMaxWidth().card(palette, 20.dp).padding(14.dp)) {
             a.optString("thumb").takeIf { it.isNotEmpty() && it != "null" }?.let { name ->
@@ -680,6 +687,10 @@ private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive:
             Text("${dayTitle(a.optLong("at"))} · ${detailLine(a)}", color = palette.muted, fontSize = 13.sp)
             if (a.optBoolean("alert")) Text("Proteção estava ativada: o celular avisou.", color = palette.muted, fontSize = 12.sp,
                 modifier = Modifier.padding(top = 4.dp))
+            if (a.optString("guess").isNotEmpty() && a.optJSONArray("names") == null)
+                Text("Pela roupa: o rosto não apareceu. Parecida com a de ${a.optString("guess")} hoje.", color = palette.muted, fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 4.dp))
+            if (a.optString("type") == "person") WhoIsFaces(hub, a, onChanged)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 // A IA errou (um cobertor virou "Cachorro"): sai da lista e fica anotado para ajustar
                 if (a.optString("type") in setOf("person", "animal", "motion")) TextButton(onClick = onMistake) { Text("Foi engano", color = Red) }

@@ -70,7 +70,9 @@ class Guard : Service() {
             if (hub != null) {
                 runCatching {
                     hub.events({ e ->
-                        if (e.optString("type") == "activity" && !e.optBoolean("update")) e.optJSONObject("item")?.let { onActivity(hub, it) }
+                        // A visit that waited for the face ("só desconhecidos") comes again as an update with alertNow
+                        if (e.optString("type") == "activity" && (!e.optBoolean("update") || e.optBoolean("alertNow")))
+                            e.optJSONObject("item")?.let { onActivity(hub, it) }
                     }, { running })
                 }
             }
