@@ -270,6 +270,21 @@ async function showEvents(){
     list.appendChild(row);
   }
 }
+// Pedidos de acesso (TV ou celular sem a senha): quem está aqui permite ou recusa
+const answered = new Set();
+setInterval(async () => {
+  let list;
+  try { list = (await api('/api/access/pending')).requests || []; } catch { return; }
+  for (const r of list) {
+    if (answered.has(r.id)) continue;
+    answered.add(r.id);
+    const allow = confirm(`${r.name} (${r.ip}) quer ver a câmera.
+
+Permitir?`);
+    try { await api('/api/access/answer', { method:'POST', body: JSON.stringify({ id: r.id, allow }) }); toast(allow ? 'Permitido.' : 'Recusado.'); } catch {}
+  }
+}, 4000);
+
 // Senha do camera-ai (celular e TV pedem uma vez; o próprio PC entra sem)
 $('#miPassword')?.addEventListener('click', async () => {
   menuDlg.close();

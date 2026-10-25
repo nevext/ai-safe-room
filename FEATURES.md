@@ -40,6 +40,9 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       navegador guarda um cookie, a TV uma chave). Criada na primeira vez (aparece no log), trocada no
       menu ☰ → Senha. 5 erros seguidos: 1 minuto de espera. Só `index.html` e `assets/` são servidos
       (antes, `server/state.json` e os clipes saíam para qualquer um na rede).
+      Sem a senha: a TV (ou um celular) pede acesso e quem já entrou toca em Permitir no navegador.
+- [x] **Atraso da TV pelo medido:** `/api/screen` diz quanto a TV precisa segurar (maior rajada dos
+      últimos 5 min × 1,3 + 0,25 s, de 0,5 a 4 s); no nevtv, Fluidez → Automático usa esse valor.
 - [ ] **Senha da câmera** (`/api/camera-password`): pronto no camera-ai, ainda não aplicado. Sem senha,
       a câmera entrega até a senha do Wi-Fi pelo DVRIP.
 - [x] **API das telas** (`/api/screen`): as TVs com o nevtv mostram a câmera com vídeo nítido, IA e

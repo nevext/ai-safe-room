@@ -644,7 +644,13 @@ async function screenControl(id, value) {
 // ---------- Vistoria: o nível da câmera (server/quality.mjs) ----------
 // Em segundo plano: enquanto o vídeo ao vivo roda (alguém assistindo ou o seguir ligado), o medidor
 // olha o vídeo como a câmera manda e o nível é reavaliado a cada 10 s. Não abre conexão a mais.
-const quality = { level: createLevel(), last: null, test: null, testing: false };
+const quality = { level: createLevel(), last: null, test: null, testing: false, bursts: [] };
+// Quanto a TV precisa segurar para tocar liso: a maior rajada dos últimos 5 min, com folga. Com a câmera entregando
+// liso, o atraso cai para ~0,6 s; com rajadas, cresce até 4 s em vez de engasgar.
+function bufferMs() {
+  if (quality.bursts.length < 3) return null;
+  return Math.min(4000, Math.max(500, Math.round(Math.max(...quality.bursts) * 1.3 + 250)));
+}
 setInterval(() => {
   if (!live?.active) return;
   const s = meter.summary();
@@ -656,6 +662,7 @@ setInterval(() => {
   const before = quality.level.level;
   const now = quality.level.push(g);
   quality.last = { at: Date.now(), stream: videoPick.using, ...s, ...g };
+  quality.bursts = [...quality.bursts, s.burstMs].slice(-30);
   if (before !== null && now !== before)
     console.log(`${new Date().toLocaleTimeString('pt-BR')} Vistoria: ${LEVELS[before].pt} → ${LEVELS[now].pt} (${g.reasons.join('; ') || 'estável'})`);
   applyVideoPick();
@@ -771,7 +778,7 @@ async function screenInfo() {
     controls: await screenControls().catch(() => []),
     motion: { active: motionWatch.active, last: motion.last },
     events: clips ? { list: '/api/events', recording: clipsOn.wanted } : null,
-    quality: { level: quality.level.level, label: quality.level.level ? LEVELS[quality.level.level] : null, vistoria: '/api/vistoria' },
+    quality: { level: quality.level.level, label: quality.level.level ? LEVELS[quality.level.level] : null, bufferMs: bufferMs(), vistoria: '/api/vistoria' },
   };
 }
 
@@ -904,6 +911,33 @@ function login(req, res, password) {
   res.setHeader('set-cookie', `camkey=${access.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
   return json(res, 200, { ok: true, key: access.key });
 }
+// Pedido de acesso: a TV (ou um celular sem a senha) pede, e quem já entrou toca em Permitir no navegador.
+// Ninguém precisa saber a senha. Um pedido por aparelho, vale 10 min.
+const requests = new Map();   // id → { id, name, ip, at, status: 'pending' | 'ok' | 'no' }
+function accessRequest(req, name) {
+  const ip = req.socket.remoteAddress.replace(/^::ffff:/, '');
+  for (const [id, r] of requests) if (r.ip === ip || Date.now() - r.at > 600000) requests.delete(id);
+  if (requests.size >= 5) return { ok: false, error: 'pedidos demais agora' };
+  const r = { id: crypto.randomBytes(16).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), ip, at: Date.now(), status: 'pending' };
+  requests.set(r.id, r);
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${ip}) pediu acesso: permita no navegador do PC ou do celular`);
+  return { ok: true, id: r.id };
+}
+function accessStatus(id) {
+  const r = requests.get(String(id));
+  if (!r || Date.now() - r.at > 600000) return { status: 'gone' };
+  if (r.status === 'ok') { requests.delete(r.id); return { status: 'ok', key: access.key }; }
+  return { status: r.status };
+}
+function accessAnswer(id, allow) {
+  const r = requests.get(String(id));
+  if (!r) return { ok: false, error: 'o pedido expirou' };
+  r.status = allow ? 'ok' : 'no';
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${r.ip}): acesso ${allow ? 'permitido' : 'recusado'}`);
+  return { ok: true };
+}
+const pendingRequests = () => [...requests.values()].filter(r => r.status === 'pending' && Date.now() - r.at < 600000).map(({ id, name, ip, at }) => ({ id, name, ip, at }));
+
 const LOGIN_PAGE = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>camera-ai</title><style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d0f12;color:#e8eaed;font:16px system-ui,sans-serif}
@@ -911,7 +945,11 @@ form{display:grid;gap:12px;width:min(320px,calc(100vw - 32px))}h1{font-size:20px
 input,button{font:inherit;padding:12px;border-radius:10px;border:1px solid #333;background:#16191d;color:inherit}
 button{background:#2f6fed;border-color:#2f6fed;font-weight:600}p{margin:0;color:#ff8a80;min-height:1.2em}</style></head>
 <body><form id="f"><h1>camera-ai</h1><input id="p" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Senha" autofocus>
-<button>Entrar</button><p id="e"></p></form><script>
+<button>Entrar</button><button type="button" id="ask" style="background:#16191d;border-color:#333">Sem a senha? Pedir para quem já entrou</button><p id="e"></p></form><script>
+ask.onclick=async()=>{const r=await(await fetch('/api/access/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:'Celular ou navegador'})})).json();
+if(!r.ok){e.textContent=r.error;return;}e.style.color='#9aa0a6';e.textContent='Pedido enviado: toque em Permitir no camera-ai do PC ou de outro celular.';
+const t=setInterval(async()=>{const s=await(await fetch('/api/access/status?id='+r.id)).json();if(s.status==='ok'){clearInterval(t);location.reload();}
+else if(s.status!=='pending'){clearInterval(t);e.style.color='#ff8a80';e.textContent=s.status==='no'?'Recusado.':'O pedido expirou.';}},2000);};
 f.onsubmit=async ev=>{ev.preventDefault();const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:p.value})});
 const d=await r.json().catch(()=>({}));if(d.ok)location.reload();else e.textContent=d.error||'não deu';};</script></body></html>`;
 
@@ -1025,6 +1063,12 @@ const server = http.createServer(async (req, res) => {
     const prefixed = /^\/k\/([0-9a-f]+)(\/.*)$/.exec(u.pathname);
     if (prefixed) u.pathname = prefixed[2];
     if (u.pathname === '/api/login' && req.method === 'POST') return login(req, res, (await readBody(req)).password);
+    if (u.pathname === '/api/access/request' && req.method === 'POST') return json(res, 200, accessRequest(req, (await readBody(req)).name));
+    if (u.pathname === '/api/access/status') {
+      const r = accessStatus(u.searchParams.get('id'));
+      if (r.key) res.setHeader('set-cookie', `camkey=${r.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
+      return json(res, 200, r);
+    }
     if (!fromThisPc(req) && !same(prefixed?.[1], access.key) && !same(cookieKey(req), access.key) && !same(req.headers['x-key'], access.key)) {
       if (u.pathname.startsWith('/api/')) return json(res, 401, { error: 'senha', login: '/api/login' });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -1044,6 +1088,8 @@ const server = http.createServer(async (req, res) => {
         if (b.delete) return json(res, 200, { ok: !!clips?.remove(String(b.delete)) });
         return json(res, 200, setClips(b.enabled));
       }
+      case '/api/access/pending': return json(res, 200, { requests: pendingRequests() });
+      case '/api/access/answer': { const b = await readBody(req); return json(res, 200, accessAnswer(b.id, !!b.allow)); }
       case '/api/camera-password': { const b = await readBody(req); return json(res, 200, await setCameraPassword(b.password)); }
       case '/api/connect': { const b = await readBody(req); return json(res, 200, await connect(b.addr, b.user, b.pass)); }
       case '/api/state':   return json(res, 200, publicState());
