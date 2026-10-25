@@ -958,9 +958,9 @@ async function runFullVistoria() {
 const CAP_INFO = {
   video: { desc: 'A imagem ao vivo da câmera.', use: 'Na TV e aqui no app.' },
   twoLenses: { desc: 'Duas lentes: uma fixa, que vê o quarto todo, e outra que gira e aproxima.', use: 'Na TV: escolha a imagem de cima, de baixo ou as duas.' },
-  motor: { desc: 'A lente de baixo gira para os lados e para cima e baixo.', use: 'Seguir pessoa (a lente vai atrás de quem aparece).' },
-  light: { desc: 'Uma luz branca na câmera, que ilumina o lugar e deixa a imagem colorida no escuro.', use: 'Nos ajustes da câmera na TV: Luz branca.' },
-  night: { desc: 'No escuro, a câmera usa infravermelho e enxerga em preto e branco, sem acender luz nenhuma.', use: 'Nos ajustes da câmera na TV: Visão noturna.' },
+  motor: { desc: 'A lente de baixo gira para os lados e para cima e baixo.', use: 'Seguir pessoa, no app e na TV (a lente vai atrás de quem aparece).' },
+  light: { desc: 'Uma luz branca na câmera, que ilumina o lugar e deixa a imagem colorida no escuro.', use: 'No app e nos ajustes da câmera na TV: Luz branca.' },
+  night: { desc: 'No escuro, a câmera usa infravermelho e enxerga em preto e branco, sem acender luz nenhuma.', use: 'No app e nos ajustes da câmera na TV: Visão noturna.' },
   motion: { desc: 'A própria câmera percebe quando algo se mexe e avisa.', use: 'O aviso de movimento na tela da câmera.' },
   camPerson: { desc: 'A própria câmera reconhece pessoas (além da IA do camera-ai).', use: null },
   camTrack: { desc: 'A câmera tem um "seguir pessoa" de fábrica. O camera-ai usa o dele, que volta para a posição de descanso.', use: null },
