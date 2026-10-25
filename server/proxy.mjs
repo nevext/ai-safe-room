@@ -141,6 +141,7 @@ async function connect(addr, user, pass) {
       };
       await loadProfiles();
       await openProfile();
+      if (activity.at(-1)?.type !== 'online') logActivity('online', 'Câmera online');
       saveState();
       const opt = await maybeOptimize();   // otimiza na conexão; no-op se já estiver bom
       return { ok: true, authUser: u, blankPass: p === '', optimized: opt.applied || false, ...publicState() };
@@ -514,6 +515,7 @@ function startAi() {
   if (ai.stop || !ai.model || !live || directWatch.on) return;
   ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => {
     ai.last = r; updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
+    personArrival(r);
   } }));
 }
 // Uma TV assistindo direto da câmera: esta câmera só aguenta uma conexão de vídeo (com a segunda, a TV caiu para
@@ -588,6 +590,7 @@ const motionWatch = watchMotion({
   onChange: active => {
     const now = Date.now();
     if (active) {
+      if (now - (motion.last || 0) > 60000) logActivity('motion', 'Movimento detectado', { thumb: true });
       motion.since = now; motion.last = now;
       if (perfil && perfil.status('motion') !== 'ok') { perfil.verify('motion', 'ok', 'a câmera avisou movimento'); perfil.save(); }
     }
@@ -629,6 +632,7 @@ async function setNightVision(on) {
   const r = await session.request(1040, { Name: name, [name]: cur });
   if (Number(r.Ret) !== 100) return { ok: false, error: 'a câmera recusou (' + r.Ret + ')' };
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Visão noturna: ${on ? 'ligada (automática)' : 'desligada (sempre colorida)'}`);
+  logActivity('night', on ? 'Visão noturna ativada' : 'Visão noturna desativada');
   return { ok: true };
 }
 
@@ -648,6 +652,7 @@ async function setWhiteLight(on) {
   const r = await session.request(1040, { Name: name, [name]: cur });
   if (Number(r.Ret) !== 100) return { ok: false, error: 'a câmera recusou (' + r.Ret + ')' };
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Luz branca: ${on ? 'acesa' : 'apagada'}`);
+  logActivity('light', on ? 'Luz branca acesa' : 'Luz branca apagada');
   return { ok: true };
 }
 
@@ -804,6 +809,58 @@ async function cameraChecks() {
       ok: caps[id].status !== 'no' })),
     { id: 'ai', label: L('IA de pessoa e animal (camera-ai)', 'Person/animal AI (camera-ai)'), status: ai.status === 'on' ? 'ok' : 'no', ok: ai.status === 'on' },
   ];
+}
+
+// ---------- Atividades: o que aconteceu, para o app (GET /api/activity) ----------
+// Movimento (da câmera), pessoa chegando (da IA), câmera online/offline, visão noturna e luz. As de movimento e
+// pessoa levam uma miniatura (320 px, do snapshot HTTP: sem outra conexão de vídeo), guardada 7 dias no PC.
+const ACT_DIR = path.join(HERE, 'atividades');
+fs.mkdirSync(ACT_DIR, { recursive: true });
+const ACT_FILE = path.join(ACT_DIR, 'atividades.json');
+let activity = (() => { try { return JSON.parse(fs.readFileSync(ACT_FILE, 'utf8')); } catch { return []; } })();
+async function logActivity(type, text, { thumb = false } = {}) {
+  const entry = { at: Date.now(), type, text, camera: perfil?.data.name || 'Câmera' };
+  if (thumb) entry.thumb = await activityThumb();
+  activity = [...activity, entry].slice(-500);
+  try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
+  broadcast({ type: 'activity', ...entry });
+}
+async function activityThumb() {
+  if (!HAS_FFMPEG || !cam.addr) return null;
+  try {
+    const jpg = await snapshot();
+    const name = `${Date.now()}.jpg`;
+    await new Promise((ok, err) => {
+      const ff = spawn(FFMPEG, ['-loglevel', 'error', '-i', 'pipe:0', '-vf', 'scale=320:-2', '-q:v', '6', '-y', path.join(ACT_DIR, name)]);
+      ff.on('close', c => c === 0 ? ok() : err(new Error('ffmpeg ' + c))); ff.on('error', err); ff.stdin.end(jpg);
+    });
+    return name;
+  } catch { return null; }
+}
+// Miniaturas com mais de 7 dias saem
+setInterval(() => {
+  const old = Date.now() - 7 * 864e5;
+  for (const f of fs.readdirSync(ACT_DIR)) if (/^\d+\.jpg$/.test(f) && +f.slice(0, -4) < old) fs.rm(path.join(ACT_DIR, f), () => {});
+  activity = activity.filter(a => a.at > Date.now() - 30 * 864e5);
+}, 3600e3).unref();
+// Pessoa chegando: a IA vê alguém depois de 2 min sem ninguém (quem fica parado não vira uma atividade atrás da outra)
+const presence = { lastSeen: 0, hits: 0 };
+function personArrival(r) {
+  const person = (r.items || []).some(it => it.kind === 'person' && it.score >= 0.5);
+  if (!person) { presence.hits = 0; return; }
+  const now = Date.now();
+  if (++presence.hits >= 3) {
+    if (now - presence.lastSeen > 120000) logActivity('person', 'Pessoa detectada', { thumb: true });
+    presence.lastSeen = now;
+  }
+}
+function serveThumb(res, name) {
+  if (!/^\d+\.jpg$/.test(name)) return json(res, 404, { error: 'não encontrado' });
+  fs.readFile(path.join(ACT_DIR, name), (e, data) => {
+    if (e) return json(res, 404, { error: 'não encontrado' });
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'max-age=604800' });
+    res.end(data);
+  });
 }
 
 // ---------- Perfil da câmera (server/perfil.mjs) e a vistoria completa ----------
@@ -972,7 +1029,7 @@ const CAP_INFO = {
 function perfilInfo() {
   if (!perfil) return { ok: false, error: 'sem câmera' };
   const p = perfil.data;
-  return { ok: true, serial: p.serial, model: p.model, firmware: p.firmware, firstSeen: p.firstSeen, running: fullVistoria.running,
+  return { ok: true, name: p.name || 'Câmera', kind: PROFILE.name || null, serial: p.serial, model: p.model, firmware: p.firmware, firstSeen: p.firstSeen, running: fullVistoria.running,
     caps: Object.entries(CAP_LABELS).filter(([id]) => p.caps[id]).map(([id, label]) => ({ id, label, ...CAP_INFO[id], ...p.caps[id] })),
     history: p.history.slice(-50).reverse() };
 }
@@ -995,7 +1052,7 @@ async function vistoriaInfo() {
 async function screenInfo() {
   return {
     version: SCREEN_VERSION, hub: 'camera-ai',
-    camera: { connected: !!cam.addr, name: PROFILE.name || cam.info.model || 'Câmera', model: cam.info.model || null,
+    camera: { connected: !!cam.addr, name: perfil?.data.name || 'Câmera', kind: PROFILE.name || cam.info.model || null, model: cam.info.model || null,
       serial: cam.info.serial || null, hosts: cam.addr ? [cam.addr] : [] },
     lenses: PROFILE.lenses || null,
     video: HAS_FFMPEG ? { mjpeg: '/api/screen/video', formats: live ? ['ts', 'mjpeg'] : H264 ? ['h264', 'mjpeg'] : ['mjpeg'],
@@ -1278,6 +1335,7 @@ setInterval(async () => {
   if (r.ok) { camMisses = 0; return; }
   if (++camMisses < 3) return;
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Câmera: ${cam.addr} sumiu; procurando de novo na rede`);
+  logActivity('offline', 'Câmera offline');
   camMisses = 0;
   cam.addr = null; cam.dvr?.close(); cam.dvr = null;
   autoConnect(1);   // ímpar: procura na rede primeiro (o IP pode ter mudado)
@@ -1310,6 +1368,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, r);
     }
     if (u.pathname.startsWith('/api/events/') && req.method === 'GET') return serveClip(req, res, decodeURIComponent(u.pathname.slice(12)));
+    if (u.pathname.startsWith('/api/activity/') && req.method === 'GET') return serveThumb(res, decodeURIComponent(u.pathname.slice(14)));
     switch (u.pathname) {
       case '/api/events': {
         if (req.method === 'GET') return json(res, 200, clipsInfo());
@@ -1318,7 +1377,12 @@ const server = http.createServer(async (req, res) => {
         if (b.delete) return json(res, 200, { ok: !!clips?.remove(String(b.delete)) });
         return json(res, 200, setClips(b.enabled));
       }
-      case '/api/perfil': return json(res, 200, perfilInfo());
+      case '/api/perfil': {
+        // O nome que a pessoa dá à câmera ("Quarto")
+        if (req.method === 'POST') { const b = await readBody(req); if (perfil && b.name) { perfil.data.name = String(b.name).slice(0, 40); perfil.save(); } }
+        return json(res, 200, perfilInfo());
+      }
+      case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
       case '/api/perfil/vistoria': return json(res, 200, await runFullVistoria());
       case '/api/access/pending': return json(res, 200, { requests: pendingRequests() });
       case '/api/access/answer': { const b = await readBody(req); return json(res, 200, accessAnswer(b.id, !!b.allow)); }

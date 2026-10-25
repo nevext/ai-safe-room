@@ -16,3 +16,5 @@ server/state.json
 server/eventos/
 # perfil de cada câmera (número de série, IPs, histórico)
 server/perfis/
+# atividades (miniaturas de dentro de casa)
+server/atividades/

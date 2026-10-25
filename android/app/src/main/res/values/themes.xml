@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.CameraAi" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#0D0F12</item>
-        <item name="android:statusBarColor">#0D0F12</item>
-        <item name="android:navigationBarColor">#0D0F12</item>
+    <!-- O fundo enquanto o Compose abre: o mesmo da abertura do app -->
+    <style name="Theme.AiSafeRoom" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F5F8FD</item>
+        <item name="android:statusBarColor">#F5F8FD</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

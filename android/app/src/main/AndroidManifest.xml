@@ -6,10 +6,10 @@
 
     <!-- camera-ai roda num PC da casa e fala HTTP na rede local -->
     <application
-        android:label="camera-ai"
+        android:label="AI Safe Room"
         android:icon="@drawable/ic_launcher"
         android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.CameraAi">
+        android:theme="@style/Theme.AiSafeRoom">
         <activity
             android:name=".MainActivity"
             android:exported="true"

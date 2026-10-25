@@ -1,4 +1,4 @@
-package io.nevext.cameraai
+package io.nevext.aisaferoom
 
 import org.json.JSONArray
 import org.json.JSONObject
@@ -20,7 +20,7 @@ data class Found(val root: String, val serial: String?)
 class Locked : IOException("camera-ai pede acesso")
 
 /**
- * Talking to camera-ai, the program on the home computer that holds the camera: it finds it on the network, asks
+ * Talking to the home computer's AI Safe Room (camera-ai), the program that holds the cameras: it finds it on the network, asks
  * it to let this phone in, and reads and changes what the camera offers. Everything here is blocking: call it off
  * the main thread.
  */
@@ -44,8 +44,32 @@ class Hub(val root: String, val key: String?) {
     /** Checks what's still unchecked (the light may turn on and the lens turn). Takes up to a minute. */
     fun checkAll(): JSONObject = json(base + "/api/perfil/vistoria", "{}", timeoutMs = 120_000)
 
-    /** The live picture as JPEGs (MJPEG), the whole frame. */
-    fun videoUrl(width: Int, height: Int) = "$base/api/screen/video?view=whole&width=$width&height=$height"
+    /** The live picture as JPEGs (MJPEG): view is whole, top (lens 1) or bottom (lens 2). */
+    fun videoUrl(view: String, width: Int, height: Int) = "$base/api/screen/video?view=$view&width=$width&height=$height"
+
+    /** A still of the camera now (for the camera list). */
+    val snapshotUrl: String get() = "$base/api/snapshot"
+
+    /** An activity's thumbnail. */
+    fun thumbUrl(name: String) = "$base/api/activity/$name"
+
+    /** What happened: motion, people, camera online/offline, night vision, light (newest first). */
+    fun activity(): JSONArray = json("$base/api/activity").optJSONArray("activity") ?: JSONArray()
+
+    /** Names the camera ("Quarto"). */
+    fun rename(name: String): JSONObject = json("$base/api/perfil", JSONObject().put("name", name).toString())
+
+    /** Raw bytes of a picture (snapshot, thumbnail). */
+    fun bytes(url: String): ByteArray {
+        val c = open(url, null, 15_000)
+        try {
+            if (c.responseCode == 401) throw Locked()
+            if (c.responseCode >= 400) throw IOException("camera-ai respondeu ${c.responseCode}")
+            return c.inputStream.use { it.readBytes() }
+        } finally {
+            c.disconnect()
+        }
+    }
 
     /** The AI's detections and the camera's motion, one JSON per line, until stopped. */
     fun events(onEvent: (JSONObject) -> Unit, running: () -> Boolean) {

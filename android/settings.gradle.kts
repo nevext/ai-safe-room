@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "camera-ai"
+rootProject.name = "AI Safe Room"
 include(":app")
