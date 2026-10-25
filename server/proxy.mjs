@@ -423,6 +423,7 @@ const meter = createMeter();
 const live = HAS_FFMPEG && H264 ? createLive({
   ffmpeg: FFMPEG, inputArgs: LIVE_IN, rtsp: () => (videoPick.using = pickedStream()) === 'sub' ? subProfile()?.rtsp : mainProfile()?.rtsp, encoder: H264, meter,
   views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'],
+  onViewers: () => setTimeout(applyVideoPick, 0),
   aiFps: 10,   // a IA fica só com o quadro mais novo: num detector lento, ela mesma analisa menos
 }) : null;
 
@@ -508,11 +509,35 @@ function setFollow(enabled) {
 }
 function startAi() {
   clearTimeout(ai.idle);
-  if (ai.stop || !ai.model || !live) return;
+  if (ai.stop || !ai.model || !live || directWatch.on) return;
   ai.stop = live.onAiFrame(analyzer({ model: ai.model, onResult: r => {
     ai.last = r; updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
   } }));
 }
+// Uma TV assistindo direto da câmera: esta câmera só aguenta uma conexão de vídeo (com a segunda, a TV caiu para
+// 5 quadros/s e o camera-ai travou; medido em 25/10). Então o camera-ai solta a câmera enquanto a TV avisa (a cada
+// 20 s) e volta ao seguir quando ela para. Não pede senha: o máximo que alguém faz com isso é pausar o seguir.
+const directWatch = { until: 0, on: false };
+function setDirectWatch(watching) {
+  directWatch.until = watching ? Date.now() + 45000 : 0;
+  checkDirectWatch();
+  return { ok: true };
+}
+function checkDirectWatch() {
+  const on = Date.now() < directWatch.until;
+  if (on === directWatch.on) return;
+  directWatch.on = on;
+  if (on) {
+    if (ai.stop) { ai.stop(); ai.stop = null; }
+    live?.stopNow();
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Uma TV está vendo direto da câmera: camera-ai soltou a câmera (seguir pausado)`);
+  } else {
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} A TV parou de ver direto: camera-ai de volta à câmera`);
+    if (follow.enabled || clipsOn.wanted || ai.listeners.size) startAi();
+  }
+}
+setInterval(checkDirectWatch, 3000);
+
 function stopAiSoon() {
   clearTimeout(ai.idle);
   ai.idle = setTimeout(() => { if (!ai.listeners.size && !follow.enabled && !clipsOn.wanted && ai.stop) { ai.stop(); ai.stop = null; } }, 10000);
@@ -585,27 +610,10 @@ async function imagingOptions() {
 async function screenControls() {
   if (!cam.addr) return [];
   const s = await getImaging();
-  const o = await imagingOptions();
-  const level = (id, name, label, value) => {
-    const [min, max] = o[name] || [0, 100];
-    return { id, type: 'level', label, min, max, step: (max - min) / 10, value: Math.round(value) };
-  };
+  // Só o que se usa: o resto (brilho, contraste, cor, nitidez, contraluz, vídeo, clipes) fica no navegador
   return [
-    { id: 'ircut', type: 'choice', label: L('Dia / noite', 'Day / night'), value: dayNight.mode === 'SCHEDULE' ? 'SCHEDULE' : s.ircut,
-      options: [
-        { value: 'SCHEDULE', label: L(`Por horário (${hour(dayNight.night)}–${hour(dayNight.day)})`, `By the clock (${dayNight.night}–${dayNight.day})`) },
-        { value: 'AUTO', label: L('Automático', 'Automatic') }, { value: 'ON', label: L('Dia', 'Day') }, { value: 'OFF', label: L('Noite', 'Night') }] },
-    level('brightness', 'Brightness', L('Brilho', 'Brightness'), s.brightness),
-    level('contrast', 'Contrast', L('Contraste', 'Contrast'), s.contrast),
-    level('saturation', 'ColorSaturation', L('Cor', 'Color'), s.saturation),
-    level('sharpness', 'Sharpness', L('Nitidez', 'Sharpness'), s.sharpness),
-    ...(s.wdr ? [{ id: 'wdr', type: 'toggle', label: L('Contraluz (WDR)', 'Backlight (WDR)'), value: s.wdr === 'ON' }] : []),
+    { id: 'night', type: 'toggle', label: L('Visão noturna', 'Night vision'), value: s.ircut === 'OFF' },
     ...(PROFILE.ptz?.personFollow ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
-    { id: 'video', type: 'choice', label: L('Vídeo da câmera', 'Camera video'), value: videoPick.choice,
-      options: [
-        { value: 'auto', label: L(`Automático (${videoPick.using === 'sub' ? 'pequeno' : 'grande'})`, `Automatic (${videoPick.using === 'sub' ? 'small' : 'big'})`) },
-        { value: 'main', label: L('Grande (nítido)', 'Big (sharp)') }, { value: 'sub', label: L('Pequeno (leve)', 'Small (light)') }] },
-    ...(clips && ai.model ? [{ id: 'clips', type: 'toggle', label: L('Gravar quando aparecer alguém', 'Record when someone shows up'), value: clipsOn.wanted }] : []),
   ];
 }
 
@@ -614,9 +622,11 @@ async function screenControl(id, value) {
     ircut: async () => {
       dayNight = { ...dayNight, mode: String(value) === 'SCHEDULE' ? 'SCHEDULE' : 'MANUAL' };
       saveState();
-      if (dayNight.mode === 'SCHEDULE') { await applySchedule(); return { ok: true }; }
+      if (dayNight.mode === 'SCHEDULE') { lastScheduled = null; await applySchedule(); return { ok: true }; }
       return setImaging({ ircut: String(value) });
     },
+    // Liga ou desliga agora; o horário (19h–6h) volta a mandar na próxima virada
+    night: () => setImaging({ ircut: value ? 'OFF' : 'ON' }),
     wdr: () => setImaging({ wdr: value ? 'ON' : 'OFF' }),
     brightness: () => setImaging({ brightness: +value }),
     contrast: () => setImaging({ contrast: +value }),
@@ -671,6 +681,9 @@ setInterval(() => {
 // Qual vídeo da câmera o ao vivo puxa: no automático, o pequeno só no Nível 1 (a câmera engasgando no grande).
 const videoPick = { choice: (() => { try { return JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).video || 'auto'; } catch { return 'auto'; } })(), using: 'main' };
 function pickedStream() {
+  // Só a IA (seguir, clipes): o vídeo pequeno basta e gasta quase nada da câmera (~0,15 Mbps). O grande só com
+  // uma tela assistindo por aqui
+  if (!live?.viewers) return 'sub';
   if (videoPick.choice !== 'auto') return videoPick.choice;
   return quality.level.level === 1 && subProfile() !== mainProfile() ? 'sub' : 'main';
 }
@@ -973,9 +986,12 @@ function scheduledIrCut(now = new Date()) {
   const isNight = night > day ? (t >= night || t < day) : (t >= night && t < day);
   return isNight ? 'OFF' : 'ON';   // ONVIF: IrCutFilter OFF = noite (infravermelho), ON = dia
 }
+let lastScheduled = null;   // o horário só manda na virada (e ao ligar): quem ligou à mão fica assim até lá
 async function applySchedule() {
   if (dayNight.mode !== 'SCHEDULE' || !cam.addr) return;
   const want = scheduledIrCut();
+  if (want === lastScheduled) return;
+  lastScheduled = want;
   try {
     const now = (await getImaging()).ircut;
     if (now !== want) {
@@ -1064,6 +1080,7 @@ const server = http.createServer(async (req, res) => {
     if (prefixed) u.pathname = prefixed[2];
     if (u.pathname === '/api/login' && req.method === 'POST') return login(req, res, (await readBody(req)).password);
     if (u.pathname === '/api/access/request' && req.method === 'POST') return json(res, 200, accessRequest(req, (await readBody(req)).name));
+    if (u.pathname === '/api/screen/direct' && req.method === 'POST') return json(res, 200, setDirectWatch(!!(await readBody(req)).watching));
     if (u.pathname === '/api/access/status') {
       const r = accessStatus(u.searchParams.get('id'));
       if (r.key) res.setHeader('set-cookie', `camkey=${r.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);

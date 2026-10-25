@@ -39,7 +39,7 @@ const listen = () => new Promise((ok, err) => {
  * ai: [largura, altura] dos quadros da IA (RGB). rtsp(): o endereço do vídeo principal agora.
  * meter: o medidor da vistoria (createMeter), que recebe o vídeo como a câmera mandou.
  */
-export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [1920, 1080], ai = [640, 720], aiFps = 5, meter = null }) {
+export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [1920, 1080], ai = [640, 720], aiFps = 5, meter = null, onViewers = null }) {
   const subs = Object.fromEntries(views.map(v => [v, new Set()]));
   const aiListeners = new Set();
   const audioSubs = new Set();
@@ -154,33 +154,40 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
     }
   }
 
-  function stopIfIdle() {
+  function stopIfIdle(delay = 10000) {
     clearTimeout(idle);
     idle = setTimeout(() => {
       if (anyone() || !ff) return;
       clearTimeout(restart);
       quitting = true;
       try { ff.kill('SIGKILL'); } catch {}
-    }, 10000);
+    }, delay);
   }
+  const viewers = () => audioSubs.size + views.reduce((n, v) => n + subs[v].size, 0);
 
   return {
     views,
     stats: () => stats,
     /** Conectado na câmera agora (alguém assistindo ou a IA ligada). */
     get active() { return !!ff; },
+    /** Telas assistindo por aqui (vídeo ou som); a IA não conta. */
+    get viewers() { return viewers(); },
+    /** Solta a câmera já, se só a IA usava (ela já parou). */
+    stopNow() { stopIfIdle(0); },
     /** Manda a vista para esta resposta HTTP (H.264, a partir do próximo quadro inteiro). */
     watch(view, res) {
       const sub = { res, waiting: true };
       subs[view].add(sub);
-      res.on('close', () => { subs[view].delete(sub); stopIfIdle(); });
+      res.on('close', () => { subs[view].delete(sub); stopIfIdle(); onViewers?.(); });
       start();
+      onViewers?.();
     },
     /** Manda o som (PCM 16 bits, 8 kHz, mono) para esta resposta HTTP. */
     listen(res) {
       audioSubs.add(res);
-      res.on('close', () => { audioSubs.delete(res); stopIfIdle(); });
+      res.on('close', () => { audioSubs.delete(res); stopIfIdle(); onViewers?.(); });
       start();
+      onViewers?.();
     },
     /**
      * Recebe o MPEG-TS da vista (pacotes inteiros; key = onde começa um quadro inteiro, ou -1) enquanto o

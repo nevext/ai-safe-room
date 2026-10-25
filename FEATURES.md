@@ -45,6 +45,11 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       últimos 5 min × 1,3 + 0,25 s, de 0,5 a 4 s); no nevtv, Fluidez → Automático usa esse valor.
 - [ ] **Senha da câmera** (`/api/camera-password`): pronto no camera-ai, ainda não aplicado. Sem senha,
       a câmera entrega até a senha do Wi-Fi pelo DVRIP.
+- [x] **Uma conexão de vídeo por vez:** esta câmera não aguenta duas (medido em 25/10: com a TV direto no vídeo
+      grande e o camera-ai no pequeno, a TV caiu para 5 quadros/s e o camera-ai travou). Sem tela assistindo pelo
+      camera-ai, ele usa só o vídeo pequeno (~0,15 Mbps) para seguir e detectar; uma TV vendo direto avisa
+      (`/api/screen/direct`, a cada 20 s) e o camera-ai solta a câmera até ela parar.
+- [x] **Painel das telas enxuto:** só Visão noturna (vale até a próxima virada do horário) e Seguir pessoa.
 - [x] **API das telas** (`/api/screen`): as TVs com o nevtv mostram a câmera com vídeo nítido, IA e
       os controles que o camera-ai listar; sem o PC, seguem direto da câmera (sem IA).
 - [x] Interface estilo nevext (Geist, azul #2563eb), player com controles que somem,
