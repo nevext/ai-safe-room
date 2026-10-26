@@ -45,6 +45,17 @@ loja, quem faz cada parte e as decisões tomadas.
        (exigido de conta pessoal nova).
 5. [ ] (Opcional, já) conta na **Tuya** em iot.tuya.com.
 
+## Sem a IA, o app é o app da câmera (sem o computador)
+
+Regra do dono (26/10): sem a IA o app funciona como o app original da câmera, só celular e câmera; o computador é
+só para a IA.
+- [x] Vídeo direto (RTSP), visão noturna, luz, girar, seguir e pessoa da câmera, foto, relógio, senha e falar, pelo
+      DVRIP no celular (`Dvrip.kt`, `CameraLink.kt`). Testado com o camera-ai desligado.
+- [ ] Atividades e avisos sem o computador: o celular ouve os avisos da câmera (pessoa, movimento) e guarda.
+- [ ] Primeiro uso sem o computador: achar a câmera na rede e entrar com a senha dela (hoje o app aprende com o
+      camera-ai uma vez).
+- [ ] Fora de casa sem o computador: pela nuvem da marca (XM / JFTech).
+
 ## Ideia: configurar câmera nova pelo AI Safe Room
 
 Quem comprou a câmera baixa o AI Safe Room para pôr ela no Wi-Fi (de graça), em vez do app da marca. É a porta de
