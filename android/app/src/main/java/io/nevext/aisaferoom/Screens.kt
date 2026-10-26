@@ -373,6 +373,13 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
     val hub = live.hub ?: return
     val scope = rememberCoroutineScope()
     var askAi by remember { mutableStateOf(false) }
+    var ownersOnly by remember { mutableStateOf<String?>(null) }
+    ownersOnly?.let { what ->
+        androidx.compose.material3.AlertDialog(onDismissRequest = { ownersOnly = null },
+            title = { Text("Só os donos mudam $what") },
+            text = { Text("Você é membro da família: vê, ouve, fala e recebe os avisos. Peça a um dono para mudar $what.") },
+            confirmButton = { TextButton(onClick = { ownersOnly = null }) { Text("Entendi") } })
+    }
     if (askAi) androidx.compose.material3.AlertDialog(onDismissRequest = { askAi = false },
         title = { Text("A Proteção usa a IA") },
         text = { Text("Para avisar quando aparecer alguém, alguém precisa saber que é uma pessoa: a IA, ou a detecção de pessoa da própria câmera (Câmeras → a câmera → A própria câmera). Ligue uma das duas.") },
@@ -421,10 +428,11 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
         }
         Spacer(Modifier.height(14.dp))
 
-        // Away mode and privacy, one tap each
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Away mode and privacy, one tap each (owners; members see them; guests don't)
+        if (!live.guest) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ModeCard(Icons.Outlined.Shield, "Proteção", if (live.protectionOn) "Ativada" else "Desativada", live.protectionOn,
-                Modifier.weight(1f), onLongClick = onProtection) { on ->
+                Modifier.weight(1f), onLongClick = if (live.owner) onProtection else null) { on ->
+                if (!live.owner) { ownersOnly = "a Proteção"; return@ModeCard }
                 if (on && !live.aiOn && !live.cameraPerson) { askAi = true; return@ModeCard }
                 scope.launch {
                     withContext(Dispatchers.IO) { runCatching { hub.setProtection(on); hub.screen() } }
@@ -433,6 +441,7 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
             }
             ModeCard(Icons.Outlined.VisibilityOff, "Privacidade", if (live.privacyOn) "Câmera coberta" else "Desligada", live.privacyOn,
                 Modifier.weight(1f)) { on ->
+                if (!live.owner) { ownersOnly = "a Privacidade"; return@ModeCard }
                 scope.launch {
                     withContext(Dispatchers.IO) { runCatching { hub.setPrivacy(on); hub.screen() } }
                         .onSuccess { live.info = it }.onFailure { live.problem = "Não deu: ${it.message}" }
@@ -575,6 +584,10 @@ fun CameraScreen(live: Live, visible: Boolean, onBack: () -> Unit, onFeatures: (
         if (live.hasPtz) {
             Spacer(Modifier.height(14.dp))
             PtzPad(hub, onNote = { live.problem = it })
+        }
+        if (!live.guest) {
+            Spacer(Modifier.height(14.dp))
+            SirenCard(live, onNote = { live.problem = it })
         }
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().card(palette).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -808,17 +821,23 @@ private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive:
 // MARK: - Ajustes
 
 @Composable
-fun SettingsScreen(onOpen: (Screen) -> Unit) {
+fun SettingsScreen(role: String, onOpen: (Screen) -> Unit) {
+    val owner = role == "owner"
     Page {
         PageTitle("Ajustes", "Personalize e gerencie seu sistema")
-        Column(Modifier.fillMaxWidth().card(palette)) {
-            ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos, zonas e vistoria", onClick = { onOpen(Screen.Features) })
-            ListRow(Icons.Outlined.AutoAwesome, "Inteligência (IA)", "Ligar a IA, os recursos e o rigor", onClick = { onOpen(Screen.Ai) })
-            ListRow(Icons.Outlined.Notifications, "Proteção e avisos", "Avisos no celular e horário", onClick = { onOpen(Screen.Protection) })
+        if (!owner) RoleCard(role)
+        if (owner || role == "member") Column(Modifier.fillMaxWidth().card(palette)) {
+            if (owner) {
+                ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos, zonas e vistoria", onClick = { onOpen(Screen.Features) })
+                ListRow(Icons.Outlined.AutoAwesome, "Inteligência (IA)", "Ligar a IA, os recursos e o rigor", onClick = { onOpen(Screen.Ai) })
+                ListRow(Icons.Outlined.Notifications, "Proteção e avisos", "Avisos no celular e horário", onClick = { onOpen(Screen.Protection) })
+            }
             ListRow(Icons.Outlined.NotificationsActive, "Notificações", "Quais avisos aparecem na barra do celular", onClick = { onOpen(Screen.Notifications) })
-            ListRow(Icons.Outlined.Face, "Pessoas conhecidas", "Reconhecer as pessoas da casa pelo rosto", onClick = { onOpen(Screen.People) })
-            ListRow(Icons.Outlined.Group, "Família e aparelhos", "Quem tem acesso às câmeras", onClick = { onOpen(Screen.Family) })
-            ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Soon("Armazenamento")) })
+            if (owner) {
+                ListRow(Icons.Outlined.Face, "Pessoas conhecidas", "Reconhecer as pessoas da casa pelo rosto", onClick = { onOpen(Screen.People) })
+                ListRow(Icons.Outlined.Group, "Família e aparelhos", "Quem tem acesso e o que cada um pode", onClick = { onOpen(Screen.Family) })
+                ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Soon("Armazenamento")) })
+            }
         }
         Spacer(Modifier.height(14.dp))
         Column(Modifier.fillMaxWidth().card(palette)) {
@@ -827,9 +846,47 @@ fun SettingsScreen(onOpen: (Screen) -> Unit) {
             ListRow(Icons.Outlined.Wifi, "Conexão", "Status, reconectar e ver de fora de casa", onClick = { onOpen(Screen.System) })
             ListRow(Icons.Outlined.Place, "Onde pôr a câmera", "Onde não pôr, e o que ajuda a imagem e a IA", onClick = { onOpen(Screen.Placement) })
             ListRow(Icons.Outlined.Info, "Sobre", "Versão, termos de uso, privacidade", onClick = { onOpen(Screen.About) })
-            ListRow(Icons.Outlined.MonitorHeart, "Diagnóstico", "Testar a câmera, o Wi-Fi dela e a IA", onClick = { onOpen(Screen.Diagnostics) })
+            if (owner) ListRow(Icons.Outlined.MonitorHeart, "Diagnóstico", "Testar a câmera, o Wi-Fi dela e a IA", onClick = { onOpen(Screen.Diagnostics) })
         }
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** For members and guests: what this phone can do, and who to ask for the rest. */
+@Composable
+private fun RoleCard(role: String) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 14.dp).card(palette).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconBubble(Icons.Outlined.Group)
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(if (role == "guest") "Você é convidado" else "Você é membro da família", fontWeight = FontWeight.SemiBold)
+            Text(if (role == "guest") "Pode ver ao vivo, ouvir e falar pela câmera até o horário que o dono marcou."
+                else "Vê ao vivo, ouve, fala, recebe os avisos e mexe na luz, na visão noturna e na lente. Proteção, Privacidade, IA, rostos e acessos ficam com os donos.",
+                color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+    }
+}
+
+/** A guest opening Atividades: they only see live. */
+@Composable
+fun GuestNote() {
+    Page {
+        PageTitle("Atividades", "")
+        Column(Modifier.fillMaxWidth().card(palette).padding(16.dp)) {
+            Text("Convidados veem só ao vivo", fontWeight = FontWeight.SemiBold)
+            Text("O histórico e os avisos ficam com a família. Peça a um dono se precisar de mais.", color = palette.muted, fontSize = 13.sp,
+                modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}
+
+/** A screen only owners change (a member opened it from the camera). */
+@Composable
+fun OwnersOnly(onBack: () -> Unit) {
+    Page {
+        TopBar("", null, onBack)
+        PageTitle("Só os donos", "Os ajustes da câmera ficam com os donos da casa")
+        Text("Você pode ver ao vivo, ouvir, falar e mexer na luz, na visão noturna e na lente. Para o resto, peça a um dono.",
+            color = palette.muted, fontSize = 13.sp)
     }
 }
 

@@ -147,7 +147,7 @@ class Guard : Service() {
     }
 
     private fun onAccess(r: JSONObject) {
-        if (!on("notifyAccess")) return
+        if (!on("notifyAccess") || prefs.getString("role", "owner") != "owner") return
         val id = r.optString("id")
         alert(id.hashCode(), "${r.optString("name")} quer entrar", "Pediu acesso às câmeras (${r.optString("ip")}). Só permita se for de casa.", null,
             actions = listOf(action("allow", "Permitir", id.hashCode(), "id" to id), action("deny", "Recusar", id.hashCode(), "id" to id)))
@@ -255,7 +255,11 @@ class Guard : Service() {
                 .setContentTitle("De olho na casa")
                 .setContentText(if (protection) "Proteção ativada: avisa quando aparecer alguém" else "Proteção desativada: só guarda as atividades")
                 .setContentIntent(openApp(c, null))
-                .addAction(Notification.Action.Builder(null, if (protection) "Desativar" else "Ativar", toggle).build())
+                .apply {
+                    // Only owners switch the Protection
+                    if (c.getSharedPreferences("aisaferoom", Context.MODE_PRIVATE).getString("role", "owner") == "owner")
+                        addAction(Notification.Action.Builder(null, if (protection) "Desativar" else "Ativar", toggle).build())
+                }
                 .setOngoing(true)
                 .build()
         }

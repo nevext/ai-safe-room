@@ -56,13 +56,17 @@ só para a IA.
       camera-ai uma vez).
 - [ ] Fora de casa sem o computador: pela nuvem da marca (XM / JFTech).
 
-## Família: donos, membros e convidados (a fazer)
+## Família: donos, membros e convidados (feito na 0.2.0)
 
-Decidido em 26/10: até 2 **donos** (mexem em tudo, e só eles permitem quem entra); **membros** veem ao vivo, ouvem,
-falam, recebem os alertas e as atividades, luz, visão noturna e girar, mas **não** mexem na Proteção, na Privacidade,
-na IA, nos rostos, na senha nem na família; **convidados** (babá, diarista) com prazo, só o ao vivo, ouvir e falar.
-A regra fica no camera-ai, não só escondendo botões. Membros e convidados não recebem a senha da câmera (o vídeo
-vai pelo computador até a câmera ter um usuário só de ver).
+Até 2 **donos** (mexem em tudo, e só eles permitem quem entra, escolhendo o papel); **membros** veem ao vivo, ouvem,
+falam, recebem os alertas e as atividades, luz, visão noturna, girar e sirene, mas **não** mexem na Proteção, na
+Privacidade, na IA, nos rostos, nas senhas nem na família; **convidados** (babá, diarista) por 4 h, 8 h, 1 dia ou 7
+dias, só o ao vivo, ouvir e falar. A regra fica no camera-ai (`allowed()` em `server/proxy.mjs`, 403 para o resto);
+o app só esconde o que o papel não pode. O computador da casa é sempre dono. Quem já tinha acesso: o aparelho mais
+antigo virou dono, os outros membros.
+
+Falta: o vídeo direto da câmera leva a senha dela no endereço (RTSP), então um convidado vencido que guardou o
+endereço ainda veria a câmera até a senha mudar. O certo é um usuário só de ver na câmera (XM aceita usuários extras).
 
 ## Ideia: configurar câmera nova pelo AI Safe Room
 

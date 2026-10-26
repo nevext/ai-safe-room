@@ -107,7 +107,7 @@ const follow = { wanted: (() => { try { return !!JSON.parse(fs.readFileSync(path
 // ---------- helpers HTTP ----------
 const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
 const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json', ...cors }); res.end(JSON.stringify(obj)); };
-const readBody = (req) => new Promise((ok) => { let b = ''; req.on('data', d => b += d); req.on('end', () => { try { ok(JSON.parse(b || '{}')); } catch { ok({}); } }); });
+const readBody = (req) => req._body ??= new Promise((ok) => { let b = ''; req.on('data', d => b += d); req.on('end', () => { try { ok(JSON.parse(b || '{}')); } catch { ok({}); } }); });
 
 // ---------- ONVIF ----------
 function wsse(user, pass) {
@@ -2072,29 +2072,86 @@ const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.lengt
 // Cada aparelho que entra (pela senha ou pelo Permitir) ganha a própria chave: dá para ver quem tem acesso e tirar um
 // só. A chave antiga (access.key) continua valendo para quem entrou antes disto.
 access.devices ??= [];
-function newDevice(name) {
-  const d = { id: crypto.randomBytes(6).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), key: crypto.randomBytes(24).toString('hex'), at: Date.now(), lastSeen: Date.now() };
+// Família: até 2 donos (mexem em tudo e aprovam aparelhos novos), membros (veem, ouvem, falam, recebem os avisos e
+// mexem em luz, visão noturna e girar; não na Proteção, Privacidade, IA, rostos, senhas nem na família) e convidados
+// (babá, diarista: só ao vivo, ouvir e falar, até a hora marcada). Quem já tinha acesso: o mais antigo vira dono.
+const MAX_OWNERS = 2;
+if (access.devices.length && !access.devices.some(d => d.role)) {
+  const oldest = access.devices.reduce((a, b) => (a.at <= b.at ? a : b));
+  for (const d of access.devices) d.role = d === oldest ? 'owner' : 'member';
+}
+const owners = () => access.devices.filter(d => d.role === 'owner').length;
+function newDevice(name, role, hours) {
+  role = ['owner', 'member', 'guest'].includes(role) ? role : owners() ? 'member' : 'owner';
+  if (role === 'owner' && owners() >= MAX_OWNERS) role = 'member';
+  const d = { id: crypto.randomBytes(6).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), key: crypto.randomBytes(24).toString('hex'),
+    role, at: Date.now(), lastSeen: Date.now() };
+  if (role === 'guest') d.until = Date.now() + Math.min(24 * 30, Math.max(1, +hours || 8)) * 3600e3;
   access.devices.push(d);
   saveState();
   return d;
 }
-function knownKey(k) {
-  if (same(k, access.key)) return true;
+// O aparelho da chave, ou null. Convidado vencido perde o acesso na hora.
+function deviceOf(k) {
+  if (typeof k !== 'string') return null;
+  if (same(k, access.key)) return { id: null, name: 'Este acesso', role: 'owner' };
   const d = access.devices.find(d => same(k, d.key));
-  if (d && Date.now() - d.lastSeen > 600000) { d.lastSeen = Date.now(); saveState(); }
-  return !!d;
+  if (!d) return null;
+  if (d.until && Date.now() > d.until) {
+    access.devices = access.devices.filter(x => x !== d);
+    saveState();
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Acesso de convidado de ${d.name} venceu`);
+    return null;
+  }
+  if (Date.now() - d.lastSeen > 600000) { d.lastSeen = Date.now(); saveState(); }
+  return d;
 }
-function devicesInfo() {
-  return { ok: true, devices: access.devices.map(({ id, name, at, lastSeen }) => ({ id, name, at, lastSeen })) };
+const knownKey = (k) => !!deviceOf(k);
+// Quem está pedindo: o próprio PC é dono
+function who(req, prefixed) {
+  if (fromThisPc(req)) return { id: null, name: 'Este computador', role: 'owner' };
+  return deviceOf(prefixed?.[1]) || deviceOf(cookieKey(req)) || deviceOf(req.headers['x-key']);
 }
-function removeDevice(id) {
-  const n = access.devices.length;
-  access.devices = access.devices.filter(d => d.id !== String(id));
-  if (access.devices.length === n) return { ok: false, error: 'aparelho não encontrado' };
+function devicesInfo(me) {
+  return { ok: true, maxOwners: MAX_OWNERS, devices: access.devices.map(({ id, name, role, until, at, lastSeen }) =>
+    ({ id, name, role: role || 'member', until: until || null, at, lastSeen, me: !!me?.id && me.id === id })) };
+}
+function removeDevice(id, me) {
+  const d = access.devices.find(d => d.id === String(id));
+  if (!d) return { ok: false, error: 'aparelho não encontrado' };
+  // O computador da casa é sempre dono: dele dá para tirar até o último
+  if (d.role === 'owner' && owners() === 1 && me?.id) return { ok: false, error: 'é o único dono: escolha outro dono antes' };
+  access.devices = access.devices.filter(x => x !== d);
   saveState();
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Acesso de um aparelho removido`);
-  return { ok: true, ...devicesInfo() };
+  return { ok: true, ...devicesInfo(me) };
 }
+function setRole(id, role, hours, me) {
+  const d = access.devices.find(d => d.id === String(id));
+  if (!d) return { ok: false, error: 'aparelho não encontrado' };
+  if (!['owner', 'member', 'guest'].includes(role)) return { ok: false, error: 'papel desconhecido' };
+  if (role === 'owner' && d.role !== 'owner' && owners() >= MAX_OWNERS) return { ok: false, error: `no máximo ${MAX_OWNERS} donos` };
+  if (d.role === 'owner' && role !== 'owner' && owners() === 1 && me?.id) return { ok: false, error: 'precisa ficar pelo menos 1 dono' };
+  d.role = role;
+  if (role === 'guest') d.until = Date.now() + Math.min(24 * 30, Math.max(1, +hours || 8)) * 3600e3; else delete d.until;
+  saveState();
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} ${d.name} agora é ${({ owner: 'dono', member: 'membro', guest: 'convidado' })[role]}`);
+  return { ok: true, ...devicesInfo(me) };
+}
+// O que cada papel pode. Dono: tudo. Convidado: só ver, ouvir e falar.
+const GUEST_OK = new Set(['/api/me', '/api/screen', '/api/screen/video', '/api/screen/audio', '/api/screen/events', '/api/screen/thumb',
+  '/api/screen/direct-stream', '/api/state', '/api/snapshot', '/api/talk', '/api/connection', '/api/stream', '/api/audio']);
+const MEMBER_POST_OK = new Set(['/api/screen/control', '/api/ptz', '/api/talk', '/api/connection', '/api/follow', '/api/daynight']);
+const MEMBER_CONTROLS = new Set(['ircut', 'night', 'light', 'camTrack', 'follow']);
+function allowed(role, pathname, method, body) {
+  if (role === 'owner') return true;
+  if (role === 'guest') return GUEST_OK.has(pathname) && (method === 'GET' || ['/api/talk', '/api/connection'].includes(pathname));
+  // Membro: lê quase tudo, mas não a senha da câmera (com ela se mexe em tudo direto na câmera) nem a família
+  if (method === 'GET') return !['/api/devices', '/api/access/pending', '/api/camera/own', '/api/vistoria'].includes(pathname);
+  if (pathname === '/api/screen/control') return MEMBER_CONTROLS.has(body?.id);
+  return MEMBER_POST_OK.has(pathname);
+}
+const ROLE_NAME = { owner: 'dono', member: 'membro', guest: 'convidado' };
 const passwordOk = (password) => same(crypto.scryptSync(String(password ?? ''), access.salt, 32).toString('hex'), access.hash);
 function setPassword(password) {
   password = String(password ?? '');
@@ -2125,7 +2182,7 @@ function login(req, res, password, name) {
     return json(res, 401, { ok: false, error: 'senha errada' });
   }
   tries.delete(ip);
-  const d = newDevice(name || 'Navegador');
+  const d = newDevice(name || 'Navegador', owners() ? 'member' : 'owner');
   res.setHeader('set-cookie', `camkey=${d.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
   return json(res, 200, { ok: true, key: d.key });
 }
@@ -2145,13 +2202,16 @@ function accessRequest(req, name) {
 function accessStatus(id) {
   const r = requests.get(String(id));
   if (!r || Date.now() - r.at > 600000) return { status: 'gone' };
-  if (r.status === 'ok') { requests.delete(r.id); return { status: 'ok', key: newDevice(r.name).key }; }
+  if (r.status === 'ok') { requests.delete(r.id); const d = newDevice(r.name, r.role || 'member', r.hours); return { status: 'ok', key: d.key, role: d.role }; }
   return { status: r.status };
 }
-function accessAnswer(id, allow) {
+function accessAnswer(id, allow, role, hours) {
   const r = requests.get(String(id));
   if (!r) return { ok: false, error: 'o pedido expirou' };
+  if (allow && role === 'owner' && owners() >= MAX_OWNERS) return { ok: false, error: `já tem ${MAX_OWNERS} donos` };
   r.status = allow ? 'ok' : 'no';
+  r.role = ['owner', 'member', 'guest'].includes(role) ? role : 'member';
+  r.hours = hours;
   console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${r.ip}): acesso ${allow ? 'permitido' : 'recusado'}`);
   return { ok: true };
 }
@@ -2298,10 +2358,18 @@ const server = http.createServer(async (req, res) => {
       if (r.key) res.setHeader('set-cookie', `camkey=${r.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
       return json(res, 200, r);
     }
-    if (!fromThisPc(req) && !knownKey(prefixed?.[1]) && !knownKey(cookieKey(req)) && !knownKey(req.headers['x-key'])) {
+    const me = who(req, prefixed);
+    if (!me) {
       if (u.pathname.startsWith('/api/')) return json(res, 401, { error: 'senha', login: '/api/login' });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       return res.end(LOGIN_PAGE);
+    }
+    // Membro: depende de qual controle é, então o corpo é lido aqui (readBody guarda o que leu)
+    const body = req.method === 'POST' && me.role === 'member' && u.pathname === '/api/screen/control' ? await readBody(req) : null;
+    // /api/activity/<foto>, /api/events/<clipe>, /api/faces/avatar/<id> contam como a lista de onde vêm
+    const area = u.pathname.replace(/^\/api\/(activity|events)\/.+$/, '/api/$1').replace(/^\/api\/faces\/avatar\/.+$/, '/api/activity');
+    if (u.pathname.startsWith('/api/') && !allowed(me.role, area, req.method, body)) {
+      return json(res, 403, { error: me.role === 'guest' ? 'convidado só vê, ouve e fala' : 'só os donos podem fazer isso', role: me.role });
     }
     if (u.pathname === '/api/password' && req.method === 'POST') {
       const r = setPassword((await readBody(req)).password);
@@ -2382,11 +2450,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, ...protection });
       }
       case '/api/privacy': return json(res, 200, req.method === 'POST' ? await setPrivacy((await readBody(req)).on) : { ok: true, ...privacy });
-      case '/api/devices': return json(res, 200, devicesInfo());
-      case '/api/devices/remove': return json(res, 200, removeDevice((await readBody(req)).id));
+      case '/api/me': return json(res, 200, { ok: true, id: me.id, name: me.name, role: me.role, until: me.until || null });
+      case '/api/devices': return json(res, 200, devicesInfo(me));
+      case '/api/devices/remove': return json(res, 200, removeDevice((await readBody(req)).id, me));
+      case '/api/devices/role': { const b = await readBody(req); return json(res, 200, setRole(b.id, b.role, b.hours, me)); }
       case '/api/perfil/vistoria': return json(res, 200, await runFullVistoria());
       case '/api/access/pending': return json(res, 200, { requests: pendingRequests() });
-      case '/api/access/answer': { const b = await readBody(req); return json(res, 200, accessAnswer(b.id, !!b.allow)); }
+      case '/api/access/answer': { const b = await readBody(req); return json(res, 200, accessAnswer(b.id, !!b.allow, b.role, b.hours)); }
       case '/api/camera-password': { const b = await readBody(req); return json(res, 200, await setCameraPassword(b.password)); }
       case '/api/connect': { const b = await readBody(req); return json(res, 200, await connect(b.addr, b.user, b.pass)); }
       case '/api/state':   return json(res, 200, publicState());
@@ -2403,7 +2473,7 @@ const server = http.createServer(async (req, res) => {
       case '/api/daynight': { const b = await readBody(req); return json(res, 200, await screenControl('ircut', b.mode)); }
       case '/api/audio':   return startAudio(res);
       case '/api/vistoria': return json(res, 200, req.method === 'POST' ? await runVistoria(Math.min(60, Math.max(10, +(await readBody(req)).seconds || 30))) : await vistoriaInfo());
-      case '/api/screen':  return json(res, 200, await screenInfo());
+      case '/api/screen':  return json(res, 200, { ...(await screenInfo()), me: { role: me.role, name: me.name, until: me.until || null } });
       case '/api/screen/control': { const b = await readBody(req); return json(res, 200, await screenControl(b.id, b.value)); }
       case '/api/screen/events': return screenEvents(req, res);
       case '/api/screen/audio':

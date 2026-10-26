@@ -88,7 +88,15 @@ class Live {
     var away by mutableStateOf(false)
     /** Hearing the room (the speaker on the video). */
     var listen by mutableStateOf(false)
-    val hasPtz: Boolean get() = info?.optBoolean("ptz") == true
+    val hasPtz: Boolean get() = info?.optBoolean("ptz") == true && !guest
+    /**
+     * This device's place in the family: "owner" (até 2, mexem em tudo), "member" (vê, ouve, fala, luz, noite, girar;
+     * não mexe na Proteção, Privacidade, IA, rostos, senhas nem na família) or "guest" (só ao vivo, ouvir e falar, com prazo).
+     * camera-ai decides; the app only hides what the role can't do.
+     */
+    var role by mutableStateOf("owner")
+    val owner: Boolean get() = role == "owner"
+    val guest: Boolean get() = role == "guest"
     /** The camera detects people by itself: the Protection works without the AI. */
     val cameraPerson: Boolean get() = info?.optBoolean("cameraPerson") == true
     var seenAt by mutableStateOf(0L)   // activities after this are new (the number on the Atividades tab)
@@ -146,6 +154,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
         Live().apply {
             hub = prefs.getString("root", null)?.let { Hub(it, prefs.getSecret("key")) }
             seenAt = prefs.getLong("seenAt", 0)
+            role = prefs.getString("role", "owner") ?: "owner"
         }
     }
     var screen by remember { mutableStateOf<Screen>(if (live.hub == null) Screen.Find else Screen.Splash) }
@@ -179,7 +188,8 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 live.info = info
                 // Protection's state on the phone too: without the computer, the camera's own alerts follow it
                 if (!info.optBoolean("phoneOnly")) info.optJSONObject("protection")?.let { CameraLink.current()?.protection = it.optBoolean("on") }
-                live.controls = info.optJSONArray("controls") ?: JSONArray()
+                info.optJSONObject("me")?.optString("role")?.ifEmpty { null }?.let { live.role = it; prefs.edit().putString("role", it).apply() }
+                live.controls = if (live.guest) JSONArray() else info.optJSONArray("controls") ?: JSONArray()
                 live.connected = info.optJSONObject("camera")?.optBoolean("connected") == true
                 if (act != null) live.activity = act
                 live.problem = null
@@ -283,8 +293,8 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                         onActivity = { tab = Screen.Activity; screen = Screen.Activity }, onFullscreen = { fullscreen = "whole" },
                         onProtection = { open(Screen.Protection) }, onAi = { open(Screen.Ai) })
                     Screen.Cameras -> CamerasScreen(live, onCamera = { open(Screen.Camera) }, onAdd = { open(Screen.Find) })
-                    Screen.Activity -> ActivityScreen(live, onLive = { open(Screen.Camera) }, onSummaries = { open(Screen.Summaries) })
-                    else -> SettingsScreen(onOpen = open)
+                    Screen.Activity -> if (live.guest) GuestNote() else ActivityScreen(live, onLive = { open(Screen.Camera) }, onSummaries = { open(Screen.Summaries) })
+                    else -> SettingsScreen(live.role, onOpen = open)
                 }
             }
             Screen.Camera -> if (h != null) {
@@ -294,7 +304,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             Screen.Features -> if (h != null) {
                 val from = { screen = if (previous == Screen.Camera) Screen.Camera else tab }
                 BackHandler(onBack = from)
-                FeaturesScreen(live, onBack = from, onZones = { screen = Screen.Zones })
+                if (live.owner) FeaturesScreen(live, onBack = from, onZones = { screen = Screen.Zones }) else OwnersOnly(onBack = from)
             }
             Screen.Zones -> if (h != null) {
                 BackHandler { screen = Screen.Features }

@@ -44,7 +44,8 @@ class Hub(val root: String, val key: String?) {
         val pc = runCatching { json(base + "/api/screen", timeoutMs = if (known) 5_000 else 15_000) }
         pc.getOrNull()?.let { info ->
             CameraLink.direct = info.optJSONObject("ai")?.optBoolean("enabled") != true
-            if (link != null && (!known || link.access?.addr != info.optJSONObject("camera")?.optJSONArray("hosts")?.optString(0))) runCatching {
+            // Every time (it's small): the camera's address or password may have changed, even from another phone
+            if (link != null) runCatching {
                 val a = json("$base/api/camera/access")
                 link.remember(CameraLink.Access(a.getString("addr"), a.optString("user", "admin"), a.optString("pass"), a.optString("serial"),
                     a.optString("name", "Câmera"), a.optBoolean("twoLenses")))
@@ -195,7 +196,12 @@ class Hub(val root: String, val key: String?) {
 
     /** Who asked to be let in (a new phone, a TV) and waits for someone to Allow. */
     fun pendingAccess(): JSONArray = json("$base/api/access/pending").optJSONArray("requests") ?: JSONArray()
-    fun answerAccess(id: String, allow: Boolean) { json("$base/api/access/answer", JSONObject().put("id", id).put("allow", allow).toString()) }
+    fun answerAccess(id: String, allow: Boolean, role: String = "member", hours: Int = 0): JSONObject =
+        json("$base/api/access/answer", JSONObject().put("id", id).put("allow", allow).put("role", role).put("hours", hours).toString())
+
+    /** Dono, membro or convidado (for [hours]); camera-ai keeps at most 2 owners and at least 1. */
+    fun setRole(id: String, role: String, hours: Int = 0): JSONObject =
+        json("$base/api/devices/role", JSONObject().put("id", id).put("role", role).put("hours", hours).toString())
 
     /** The same computer at another address (from outside the house), keeping this phone's access. */
     fun at(otherRoot: String) = Hub(otherRoot, key)
@@ -304,7 +310,8 @@ class Hub(val root: String, val key: String?) {
                 val code = c.responseCode
                 if (code == 401 && !allowError) throw Locked()
                 val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
-                if (code >= 400 && !allowError) throw IOException("camera-ai respondeu $code")
+                // 403: what this device's role can't do ("só os donos podem fazer isso")
+                if (code >= 400 && !allowError) throw IOException(runCatching { JSONObject(text).optString("error") }.getOrNull()?.ifEmpty { null } ?: "camera-ai respondeu $code")
                 return JSONObject(text.ifEmpty { "{}" })
             } finally {
                 c.disconnect()

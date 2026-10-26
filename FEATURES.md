@@ -52,7 +52,11 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       resumo às 21h, endereço de fora de casa (Tailscale/VPN), tema claro/escuro.
 - [x] **Proteção** (`/api/protection`, com horário) e **modo privacidade** (`/api/privacy`: capas pretas do
       `AVEnc.VideoWidget` cobrem a imagem para todos, e a IA para). Atividades em `/api/activity`.
-- [ ] **Falar pela câmera e alarme de voz:** a câmera tem 3 vozes prontas (`Ability.VoiceTipType`: Alarme, "Você
+- [x] **Família por papéis:** até 2 donos, membros e convidados com prazo; a regra no camera-ai (403), o app
+      esconde o que o papel não pode; Permitir escolhe o papel. Ver `docs/PUBLICAR.md`.
+- [x] **Sirene:** o app toca uma sirene pela caixa de som da câmera por 15 s (pergunta antes), pela mesma conversa
+      do falar: funciona com ou sem o computador.
+- [ ] **Alarme de voz da própria câmera:** a câmera tem 3 vozes prontas (`Ability.VoiceTipType`: Alarme, "Você
       entrou na área de monitoramento", Personalizar) e o aviso de voz no movimento (`Detect.MotionDetect`
       `VoiceEnable`, desligado). Falta conferir ouvindo (faz barulho no quarto) e o áudio de ida (interfone).
 - [x] **Pessoas conhecidas (rosto):** cadastro guiado no app (dicas, nome, consentimento; depois "olhe para a

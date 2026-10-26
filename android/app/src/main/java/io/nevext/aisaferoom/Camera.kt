@@ -1,5 +1,6 @@
 package io.nevext.aisaferoom
 
+import androidx.compose.material.icons.outlined.Campaign
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
@@ -183,22 +184,8 @@ fun TalkButton(live: Live, onNote: (String) -> Unit, modifier: Modifier = Modifi
                 val size = maxOf(AudioRecord.getMinBufferSize(8000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), 1280)
                 val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 8000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
                 runCatching {
-                    // Without the AI the phone talks to the camera itself (the computer may be off)
-                    val direct = CameraLink.current()?.takeIf { CameraLink.direct && it.access != null }
-                    if (direct != null) {
-                        rec.startRecording()
-                        direct.talk({ b, o, n -> rec.read(b, o, n) }, { running })
-                        return@runCatching
-                    }
-                    val c = URL(hub.talkUrl).openConnection() as HttpURLConnection
-                    c.requestMethod = "POST"; c.doOutput = true; c.setChunkedStreamingMode(640)
-                    c.setRequestProperty("content-type", "application/octet-stream")
                     rec.startRecording()
-                    c.outputStream.use { out ->
-                        val buf = ByteArray(640)
-                        while (running) { val n = rec.read(buf, 0, buf.size); if (n > 0) out.write(buf, 0, n) }
-                    }
-                    if (c.responseCode >= 400) throw Exception(JSONObject(c.errorStream.bufferedReader().readText()).optString("error", "não deu"))
+                    sendVoice(hub, { b, o, n -> rec.read(b, o, n) }, { running })
                 }.onFailure { onNote("Não deu para falar: ${it.message}") }
                 runCatching { rec.stop() }; rec.release()
             }
@@ -212,6 +199,85 @@ fun TalkButton(live: Live, onNote: (String) -> Unit, modifier: Modifier = Modifi
     }, contentAlignment = Alignment.Center) {
         Icon(Icons.Outlined.Mic, if (talking) "Falando" else "Segure para falar", tint = Color.White)
     }
+}
+
+/**
+ * Sound out of the camera's speaker: PCM 16 bits 8 kHz from [read]. Without the AI the phone talks to the camera
+ * itself (the computer may be off); with it, through camera-ai.
+ */
+fun sendVoice(hub: Hub, read: (ByteArray, Int, Int) -> Int, running: () -> Boolean) {
+    val direct = CameraLink.current()?.takeIf { CameraLink.direct && it.access != null }
+    if (direct != null) { direct.talk(read, running); return }
+    val c = URL(hub.talkUrl).openConnection() as HttpURLConnection
+    c.requestMethod = "POST"; c.doOutput = true; c.setChunkedStreamingMode(640)
+    c.setRequestProperty("content-type", "application/octet-stream")
+    c.outputStream.use { out ->
+        val buf = ByteArray(640)
+        while (running()) { val n = read(buf, 0, buf.size); if (n > 0) out.write(buf, 0, n) else break }
+    }
+    if (c.responseCode >= 400) throw Exception(runCatching { JSONObject(c.errorStream.bufferedReader().readText()).optString("error") }.getOrNull()?.ifEmpty { null } ?: "não deu")
+}
+
+/**
+ * A siren, made here: a wail from 600 to 1400 Hz and back every 1.6 s, loud, in real time (the camera plays what
+ * arrives, so it's paced like a microphone, a little ahead).
+ */
+private class SirenSound {
+    private val start = System.nanoTime()
+    private var samples = 0L
+    private var phase = 0.0
+    fun read(b: ByteArray, o: Int, n: Int): Int {
+        val ahead = samples * 1_000_000_000L / 8000 - (System.nanoTime() - start)
+        if (ahead > 150_000_000L) Thread.sleep((ahead - 150_000_000L) / 1_000_000)
+        for (i in 0 until n / 2) {
+            val t = (samples % 12800) / 12800.0                  // 1.6 s cycle
+            val f = 600 + 800 * (if (t < 0.5) t * 2 else (1 - t) * 2)
+            phase += 2 * Math.PI * f / 8000
+            val v = (Math.sin(phase) * 26000).toInt()
+            b[o + i * 2] = (v and 0xff).toByte(); b[o + i * 2 + 1] = (v shr 8).toByte()
+            samples++
+        }
+        return n / 2 * 2
+    }
+}
+
+/** Ring a siren through the camera to scare someone off (asks first: it's loud in the room). */
+@Composable
+fun SirenCard(live: Live, onNote: (String) -> Unit) {
+    val hub = live.hub ?: return
+    var ringing by remember { mutableStateOf(false) }
+    var ask by remember { mutableStateOf(false) }
+    var stop by remember { mutableStateOf<(() -> Unit)?>(null) }
+    DisposableEffect(Unit) { onDispose { stop?.invoke() } }
+    Row(Modifier.fillMaxWidth().card(palette).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconBubble(Icons.Outlined.Campaign, if (ringing) Red else Blue, size = 36)
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text("Sirene", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(if (ringing) "Tocando na câmera…" else "Toca alto pela câmera por 15 segundos", color = palette.muted, fontSize = 12.sp)
+        }
+        Button(onClick = { if (ringing) stop?.invoke() else ask = true },
+            colors = ButtonDefaults.buttonColors(containerColor = if (ringing) palette.muted else Red)) { Text(if (ringing) "Parar" else "Tocar") }
+    }
+    if (ask) AlertDialog(onDismissRequest = { ask = false },
+        title = { Text("Tocar a sirene?") },
+        text = { Text("Vai tocar alto no ${live.cameraName} por 15 segundos. Quem estiver lá vai ouvir. Você pode parar antes.") },
+        confirmButton = {
+            TextButton(onClick = {
+                ask = false
+                ringing = true
+                var running = true
+                val until = System.currentTimeMillis() + 15_000
+                stop = { running = false }
+                thread {
+                    val sound = SirenSound()
+                    runCatching { sendVoice(hub, sound::read) { running && System.currentTimeMillis() < until } }
+                        .onFailure { onNote("Não deu para tocar a sirene: ${it.message}") }
+                    ringing = false
+                    stop = null
+                }
+            }) { Text("Tocar", color = Red) }
+        },
+        dismissButton = { TextButton(onClick = { ask = false }) { Text("Cancelar") } })
 }
 
 // MARK: - A câmera: o que ela faz sozinha

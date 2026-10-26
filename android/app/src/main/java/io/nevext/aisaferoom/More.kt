@@ -173,6 +173,9 @@ fun FamilyScreen(live: Live, onBack: () -> Unit) {
     var devices by remember { mutableStateOf(Kept.get<JSONArray>("devices") ?: JSONArray()) }
     var pending by remember { mutableStateOf(JSONArray()) }
     var removing by remember { mutableStateOf<JSONObject?>(null) }
+    var changing by remember { mutableStateOf<JSONObject?>(null) }   // the device whose role is being changed
+    var letting by remember { mutableStateOf<JSONObject?>(null) }    // the request being allowed, to pick its role
+    val owners = (0 until devices.length()).count { devices.optJSONObject(it)?.optString("role") == "owner" }
     var note by remember { mutableStateOf<String?>(null) }
     // The list, and who's asking to come in, every few seconds while open
     LaunchedEffect(Unit) {
@@ -183,7 +186,12 @@ fun FamilyScreen(live: Live, onBack: () -> Unit) {
     }
     Page {
         TopBar("", null, onBack)
-        PageTitle("Família e aparelhos", "Quem tem acesso às câmeras")
+        PageTitle("Família e aparelhos", "Quem tem acesso e o que cada um pode")
+        Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            ROLES.forEach { (_, name, what) ->
+                Text(buildString { append(name); append(": "); append(what) }, color = palette.muted, fontSize = 12.sp)
+            }
+        }
         for (i in 0 until pending.length()) {
             val r = pending.optJSONObject(i) ?: continue
             Column(Modifier.fillMaxWidth().padding(bottom = 10.dp).card(palette, selected = true).padding(16.dp)) {
@@ -198,12 +206,7 @@ fun FamilyScreen(live: Live, onBack: () -> Unit) {
                     TextButton(onClick = { scope.launch { withContext(Dispatchers.IO) { runCatching { hub.answerAccess(r.optString("id"), false) } } } }) {
                         Text("Recusar", color = palette.muted)
                     }
-                    Button(onClick = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) { runCatching { hub.answerAccess(r.optString("id"), true) } }
-                            note = "${r.optString("name")} entrou."
-                        }
-                    }, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Permitir") }
+                    Button(onClick = { letting = r }, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Permitir") }
                 }
             }
         }
@@ -212,17 +215,41 @@ fun FamilyScreen(live: Live, onBack: () -> Unit) {
                 color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
             for (i in 0 until devices.length()) {
                 val d = devices.optJSONObject(i) ?: continue
-                ListRow(Icons.Outlined.Smartphone, d.optString("name"), "Entrou ${whenText(d.optLong("at"))} · visto ${whenText(d.optLong("lastSeen"))}",
+                val role = ROLES.firstOrNull { it.first == d.optString("role") } ?: ROLES[1]
+                val until = d.optLong("until").takeIf { it > 0 }?.let { " até " + java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale("pt", "BR")).format(java.util.Date(it)) } ?: ""
+                ListRow(Icons.Outlined.Smartphone, d.optString("name") + if (d.optBoolean("me")) " (este celular)" else "",
+                    "${role.second}$until · visto ${whenText(d.optLong("lastSeen"))}", onClick = { changing = d },
                     trailing = {
                         Icon(Icons.Outlined.Delete, "Tirar acesso", tint = palette.muted,
                             modifier = Modifier.clip(RoundedCornerShape(50)).clickable { removing = d }.padding(8.dp))
                     })
             }
         }
-        Text("Para dar acesso a alguém: instale o AI Safe Room no celular da pessoa, no Wi-Fi de casa. O pedido aparece aqui (e no computador) para você tocar em Permitir.",
+        Text("Toque num aparelho para mudar o papel dele. Para dar acesso a alguém: instale o AI Safe Room no celular da pessoa, no Wi-Fi de casa. O pedido aparece aqui (e na notificação) para você escolher o papel e permitir.",
             color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
         note?.let { Text(it, color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp)) }
         Spacer(Modifier.height(24.dp))
+    }
+    // Allowing someone: as what
+    letting?.let { r ->
+        RolePicker("${r.optString("name")} entra como", owners, current = null, onDismiss = { letting = null }) { role, hours ->
+            scope.launch {
+                withContext(Dispatchers.IO) { runCatching { hub.answerAccess(r.optString("id"), true, role, hours) } }
+                    .onSuccess { note = if (it.optBoolean("ok")) "${r.optString("name")} entrou." else "Não deu: ${it.optString("error")}" }
+                    .onFailure { note = "Não deu: ${it.message}" }
+                letting = null
+            }
+        }
+    }
+    changing?.let { d ->
+        RolePicker(d.optString("name"), owners, current = d.optString("role"), onDismiss = { changing = null }) { role, hours ->
+            scope.launch {
+                withContext(Dispatchers.IO) { runCatching { hub.setRole(d.optString("id"), role, hours) } }.onSuccess {
+                    if (it.optBoolean("ok")) { it.optJSONArray("devices")?.let { a -> devices = a }; note = null } else note = "Não deu: ${it.optString("error")}"
+                }.onFailure { note = "Não deu: ${it.message}" }
+                changing = null
+            }
+        }
     }
     removing?.let { d ->
         AlertDialog(onDismissRequest = { removing = null },
@@ -458,4 +485,41 @@ fun NotificationsScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit
         }
         Spacer(Modifier.height(24.dp))
     }
+}
+
+/** The family roles: id, name, what they can do. */
+private val ROLES = listOf(
+    Triple("owner", "Dono", "mexe em tudo e aprova quem entra (no máximo 2)"),
+    Triple("member", "Membro", "vê ao vivo, ouve, fala, recebe os avisos e mexe na luz, visão noturna e lente; não muda Proteção, Privacidade, IA, rostos nem acessos"),
+    Triple("guest", "Convidado", "babá, diarista: só ao vivo, ouvir e falar, até a hora marcada"),
+)
+
+/** Pick a role (and, for a guest, for how long). */
+@Composable
+private fun RolePicker(title: String, owners: Int, current: String?, onDismiss: () -> Unit, onPick: (String, Int) -> Unit) {
+    var role by remember { mutableStateOf(current ?: "member") }
+    var hours by remember { mutableStateOf(8) }
+    AlertDialog(onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ROLES.forEach { (id, name, what) ->
+                    val full = id == "owner" && current != "owner" && owners >= 2
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).card(palette, selected = role == id)
+                        .clickable(enabled = !full) { role = id }.padding(12.dp)) {
+                        Text(name, fontWeight = FontWeight.SemiBold, color = if (full) palette.muted else Color.Unspecified)
+                        Text(if (full) "Já tem 2 donos" else what, color = palette.muted, fontSize = 12.sp)
+                    }
+                }
+                if (role == "guest") Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(4 to "4 h", 8 to "8 h", 24 to "1 dia", 168 to "7 dias").forEach { (h, label) ->
+                        Text(label, color = if (hours == h) Color.White else palette.muted, fontSize = 13.sp,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(if (hours == h) Blue else palette.card)
+                                .clickable { hours = h }.padding(horizontal = 12.dp, vertical = 6.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onPick(role, if (role == "guest") hours else 0) }) { Text("Pronto") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } })
 }
