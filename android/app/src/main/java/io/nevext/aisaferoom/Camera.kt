@@ -230,6 +230,7 @@ fun CameraOwnSection(hub: Hub) {
     }
     Text("A própria câmera", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, modifier = Modifier.padding(top = 16.dp))
     Text("Funciona sem a IA e não pesa na conexão.", color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+    if (own == null) Loading()
     Column(Modifier.fillMaxWidth().card(palette)) {
         own?.let { o ->
             if (o.has("person")) OwnSwitch(Icons.Outlined.PersonSearch, "Detectar pessoa (da câmera)",

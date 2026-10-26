@@ -147,7 +147,7 @@ internal fun IconBubble(icon: ImageVector, tint: Color = Blue, bg: Color = palet
 @Composable
 internal fun ListRow(icon: ImageVector, title: String, subtitle: String? = null, trailing: (@Composable () -> Unit)? = null,
                     onClick: (() -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(16.dp, 14.dp),
+    Row(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.press(onClick = onClick) else Modifier).padding(16.dp, 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = palette.text, modifier = Modifier.size(22.dp))
         Column(Modifier.weight(1f).padding(start = 14.dp)) {
@@ -238,11 +238,80 @@ private fun AiVideo(live: Live, view: String, visible: Boolean, modifier: Modifi
 
 @Composable
 fun FullscreenVideo(live: Live, view: String, visible: Boolean, onClose: () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        LiveVideo(live, view, visible, Modifier.fillMaxSize(), fit = true)
-        VideoChip("AO VIVO", live = true, modifier = Modifier.align(Alignment.TopStart).padding(16.dp))
-        Icon(Icons.Outlined.FullscreenExit, "Sair da tela cheia", tint = Color.White,
-            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp).clip(CircleShape).clickable(onClick = onClose).padding(8.dp))
+    val hub = live.hub ?: return
+    val scope = rememberCoroutineScope()
+    var lens by remember { mutableStateOf(view) }
+    var panels by remember { mutableStateOf(true) }
+    var note by remember { mutableStateOf<String?>(null) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) } }
+    val flip = { c: JSONObject ->
+        val id = c.optString("id"); val want = !c.optBoolean("value")
+        c.put("value", want); live.controls = org.json.JSONArray(live.controls.toString())
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { hub.control(id, want) } }
+                .onSuccess { live.controls = it }.onFailure { note = "Não deu: ${it.message}" }
+        }
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black).clickable(indication = null,
+        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) { panels = !panels }) {
+        LiveVideo(live, lens, visible, Modifier.fillMaxSize(), fit = true)
+        androidx.compose.animation.AnimatedVisibility(panels, Modifier.align(Alignment.CenterStart),
+            enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut()) {
+            // Left: what matters at a glance
+            Column(Modifier.fillMaxHeight().width(220.dp)
+                .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Color(0xCC000000), Color.Transparent)))
+                .padding(20.dp)) {
+                VideoChip("AO VIVO", live = true)
+                Text(live.cameraName, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, modifier = Modifier.padding(top = 12.dp))
+                Text(java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale("pt", "BR")).format(java.util.Date(now)), color = Color(0xCCFFFFFF), fontSize = 13.sp)
+                Spacer(Modifier.height(14.dp))
+                FullInfo(if (live.moving) "Movimento agora" else "Sem movimento", if (live.moving) Orange else Color(0x99FFFFFF))
+                FullInfo(if (live.aiOn) "IA ligada" else "Câmera normal (sem IA)", Color(0x99FFFFFF))
+                if (live.protectionOn) FullInfo("Proteção ativada", Blue)
+                if (live.privacyOn) FullInfo("Privacidade: câmera coberta", Orange)
+                live.activity.optJSONObject(0)?.let { a ->
+                    Text("Última: ${a.optString("text")}", color = Color(0xCCFFFFFF), fontSize = 12.sp, maxLines = 2, modifier = Modifier.padding(top = 10.dp))
+                    Text(whenText(a.optLong("at")), color = Color(0x99FFFFFF), fontSize = 11.sp)
+                }
+                note?.let { Text(it, color = Orange, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp)) }
+            }
+        }
+        androidx.compose.animation.AnimatedVisibility(panels, Modifier.align(Alignment.CenterEnd),
+            enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut()) {
+            // Right: the quick things, one tap each
+            Column(Modifier.fillMaxHeight().background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Color.Transparent, Color(0xCC000000))))
+                .padding(horizontal = 16.dp, vertical = 12.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
+                FullButton(Icons.Outlined.FullscreenExit, "Sair", false, onClose)
+                ListenButton(live, Modifier.size(48.dp))
+                TalkButton(live, onNote = { note = it }, modifier = Modifier.size(48.dp))
+                (0 until live.controls.length()).mapNotNull { live.controls.optJSONObject(it) }.filter { it.optString("type") == "toggle" }.forEach { c ->
+                    FullButton(ICONS[c.optString("id")] ?: Icons.Outlined.Settings, c.optJSONObject("label")?.optString("pt") ?: "", c.optBoolean("value")) { flip(c) }
+                }
+                if (live.twoLenses) FullButton(Icons.Outlined.Videocam, when (lens) { "top" -> "1/2"; "bottom" -> "2/2"; else -> "Ambas" }, lens != "whole") {
+                    lens = when (lens) { "whole" -> "top"; "top" -> "bottom"; else -> "whole" }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullInfo(text: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+        Box(Modifier.size(7.dp).background(color, CircleShape))
+        Text(text, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+@Composable
+private fun FullButton(icon: ImageVector, label: String, on: Boolean, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(48.dp).clip(CircleShape).background(if (on) Blue else Color(0x99000000)).press(onClick = onClick),
+            contentAlignment = Alignment.Center) { Icon(icon, label, tint = Color.White) }
+        if (label.isNotEmpty()) Text(label, color = Color.White, fontSize = 10.sp, maxLines = 1, modifier = Modifier.padding(top = 2.dp).width(64.dp),
+            textAlign = TextAlign.Center)
     }
 }
 
@@ -436,7 +505,8 @@ fun CamerasScreen(live: Live, onCamera: () -> Unit, onAdd: () -> Unit) {
 
 // MARK: - A câmera
 
-private val ICONS = mapOf("night" to Icons.Outlined.DarkMode, "light" to Icons.Outlined.Lightbulb, "follow" to Icons.AutoMirrored.Outlined.DirectionsWalk)
+private val ICONS = mapOf("night" to Icons.Outlined.DarkMode, "light" to Icons.Outlined.Lightbulb, "follow" to Icons.AutoMirrored.Outlined.DirectionsWalk,
+    "camTrack" to Icons.AutoMirrored.Outlined.DirectionsWalk)
 
 @Composable
 fun CameraScreen(live: Live, visible: Boolean, onBack: () -> Unit, onFeatures: () -> Unit, onFullscreen: (String) -> Unit) {
@@ -489,7 +559,7 @@ fun CameraScreen(live: Live, visible: Boolean, onBack: () -> Unit, onFeatures: (
             toggles.forEach { c ->
                 val on = c.optBoolean("value")
                 val id = c.optString("id")
-                Column(Modifier.weight(1f).card(palette).clickable { flip(c, !on) }.padding(12.dp)) {
+                Column(Modifier.weight(1f).card(palette).press { flip(c, !on) }.padding(12.dp)) {
                     IconBubble(ICONS[id] ?: Icons.Outlined.Settings, size = 36)
                     Text(c.optJSONObject("label")?.optString("pt") ?: id, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = 10.dp), maxLines = 2)
@@ -883,7 +953,7 @@ fun FeaturesScreen(live: Live, onBack: () -> Unit, onZones: () -> Unit) {
     var reload by remember { mutableStateOf(0) }
     var name by remember { mutableStateOf(live.cameraName) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(reload) { profile = withContext(Dispatchers.IO) { runCatching { hub.profile() }.getOrNull() } }
+    LaunchedEffect(reload) { profile = withContext(Dispatchers.IO) { runCatching { hub.profile() }.getOrNull() } ?: JSONObject() }
     val caps = profile?.optJSONArray("caps")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }.orEmpty()
         .sortedBy { if (it.optString("status") == "no") 1 else 0 }
 
@@ -924,6 +994,7 @@ fun FeaturesScreen(live: Live, onBack: () -> Unit, onZones: () -> Unit) {
                     colors = SwitchDefaults.colors(checkedTrackColor = Blue))
             }
             CameraOwnSection(hub)
+            if (profile == null) Loading(text = "Lendo a câmera…")
             PageTitle("O que a câmera faz", "${caps.count { it.optString("status") == "ok" }} recursos conferidos")
             Button(enabled = !checking, onClick = {
                 checking = true

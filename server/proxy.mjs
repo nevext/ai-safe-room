@@ -243,7 +243,9 @@ async function httpGetDigest(uri) {
   return Buffer.from(await r.arrayBuffer());
 }
 async function snapshot() {
-  if (cam.snapUri) { try { return await httpGetDigest(cam.snapUri); } catch (e) { /* cai pro ffmpeg */ } }
+  // Sem o usuário e a senha no endereço (como a câmera informa): ela passou a recusar assim (401, 26/10); com o login
+  // normal (digest) responde em 0,15 s em vez de 5–7 s
+  if (cam.snapUri) { try { const u = new URL(cam.snapUri); u.searchParams.delete('user'); u.searchParams.delete('password'); return await httpGetDigest(u.toString()); } catch (e) { if (Date.now() - (snapshot.warned || 0) > 600e3) { snapshot.warned = Date.now(); console.log('Foto da câmera (HTTP) falhou:', e.message, String(e.cause?.code || '')); } } }
   // Pelo RTSP só com o vídeo ao vivo parado: seria uma segunda conexão, e a câmera aguenta uma (em 25/10 uma foto
   // travada segurou o RTSP por uma hora e o ao vivo ficou "reconectando" para sempre)
   if (HAS_FFMPEG && cam.streamUri && !live?.active) return ffmpegFrame(cam.streamUri);

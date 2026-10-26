@@ -1,6 +1,18 @@
 package io.nevext.aisaferoom
 
 import androidx.compose.foundation.Image
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.composed
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.res.painterResource
@@ -110,5 +122,25 @@ fun VideoChip(text: String, live: Boolean = false, modifier: Modifier = Modifier
             Spacer(Modifier.width(5.dp))
         }
         Text(text, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** A tap that gives: the thing sinks a little while pressed (and the ripple), light and quick. */
+fun Modifier.press(enabled: Boolean = true, onClick: () -> Unit): Modifier = composed {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, tween(110), label = "press")
+    graphicsLayer { scaleX = scale; scaleY = scale }
+        .clickable(interactionSource = source, indication = LocalIndication.current, enabled = enabled, onClick = onClick)
+}
+
+/** The loading circle, while something is on its way. */
+@Composable
+fun Loading(modifier: Modifier = Modifier, text: String? = null) {
+    Box(modifier.fillMaxWidth().padding(vertical = 28.dp), contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(Modifier.size(28.dp), color = Blue, strokeWidth = 2.5.dp)
+            text?.let { Text(it, color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
+        }
     }
 }

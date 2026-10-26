@@ -81,7 +81,7 @@ fun PeopleScreen(live: Live, onBack: () -> Unit, onEnroll: () -> Unit) {
             Text("O computador ainda não tem os modelos de rosto (server\\get-faces.ps1).", color = palette.muted, fontSize = 13.sp)
         }
         Column(Modifier.fillMaxWidth().card(palette)) {
-            if (people.isEmpty()) Text("Ninguém cadastrado ainda. Com as pessoas da casa cadastradas, as atividades mostram o nome de quem chegou, e a Proteção pode avisar só de desconhecidos.",
+            if (info == null) Loading() else if (people.isEmpty()) Text("Ninguém cadastrado ainda. Com as pessoas da casa cadastradas, as atividades mostram o nome de quem chegou, e a Proteção pode avisar só de desconhecidos.",
                 color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
             people.forEach { p ->
                 Row(Modifier.fillMaxWidth().padding(16.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {

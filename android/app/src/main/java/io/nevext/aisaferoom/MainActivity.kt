@@ -1,5 +1,6 @@
 package io.nevext.aisaferoom
 
+import androidx.compose.animation.togetherWith
 import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
@@ -243,7 +244,14 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
     val back: () -> Unit = { screen = tab }
     val h = live.hub
     Box(Modifier.fillMaxSize()) {
-        when (val s = screen) {
+        androidx.compose.animation.AnimatedContent(screen, label = "screen",
+            contentKey = { if (it == Screen.Home || it == Screen.Cameras || it == Screen.Activity || it == Screen.Settings) "tabs" else it },
+            transitionSpec = {
+                (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200)) +
+                    androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(220)) { it / 14 }) togetherWith
+                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120))
+            }) { s ->
+        when (s) {
             Screen.Splash -> SplashScreen()
             Screen.Find -> {
                 // Opened from "+" with a computer already connected: back returns to the app
@@ -316,6 +324,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 BackHandler(onBack = back)
                 SoonScreen(s.title, onBack = back)
             }
+        }
         }
         fullscreen?.let { view ->
             if (h != null) {

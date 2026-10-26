@@ -76,6 +76,19 @@ import java.util.Locale
 // MARK: - A câmera normal, direto (sem IA)
 
 /**
+ * Whether this phone decodes the camera's big video in hardware. Without it (emulators, weak phones) the software
+ * decoder falls behind, the camera waits on it and chokes (the picture freezes and its snapshot fails, 26/10).
+ */
+fun decodesBig(width: Int, height: Int): Boolean = runCatching {
+    android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+        if (info.isEncoder || "video/avc" !in info.supportedTypes.map { it.lowercase() }) return@any false
+        val hardware = if (android.os.Build.VERSION.SDK_INT >= 29) info.isHardwareAccelerated
+            else !info.name.lowercase().let { it.startsWith("omx.google") || it.startsWith("c2.android") }
+        hardware && info.getCapabilitiesForType("video/avc").videoCapabilities.isSizeSupported(width, height)
+    }
+}.getOrDefault(false)
+
+/**
  * The camera's own video, straight from it over RTSP, like the TV does. This is how the app starts: no camera-ai in
  * the way, nothing extra on the camera's connection. [view] crops one lens of a two-lens camera.
  */
@@ -89,8 +102,16 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     var failed by remember { mutableStateOf(false) }
     var attempt by remember { mutableIntStateOf(0) }
     var aspect by remember { mutableStateOf(1.5f) }
-    LaunchedEffect(hub, visible, attempt) {
-        if (visible && url == null) url = withContext(Dispatchers.IO) { runCatching { hub.directStream().optString("main").ifEmpty { null } }.getOrNull() }
+    var light by remember(hub) { mutableStateOf<Boolean?>(null) }   // the light video (sub): the phone can't keep up with the big one
+    var stalls by remember { mutableIntStateOf(0) }
+    LaunchedEffect(hub, visible, attempt, light) {
+        if (visible && url == null) url = withContext(Dispatchers.IO) {
+            runCatching {
+                val s = hub.directStream()
+                val useLight = light ?: !decodesBig(s.optInt("width", 3072), s.optInt("height", 2048)).also { light = !it }
+                s.optString(if (useLight) "sub" else "main").ifEmpty { null }
+            }.getOrNull()
+        }
         if (url == null && visible) { delay(3000); attempt++ }
     }
     val player = remember(url, visible, attempt) {
@@ -100,7 +121,11 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
             volume = 0f
             playWhenReady = true
             addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) { playing = true; failed = false } }
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_READY) { playing = true; failed = false }
+                    // Stopping to wait for video again and again: the big one is too much here, go light
+                    if (state == Player.STATE_BUFFERING && playing && light == false && ++stalls >= 3) { light = true; url = null; attempt++ }
+                }
                 override fun onPlayerError(error: PlaybackException) { playing = false; failed = true; url = null }   // the password may have changed
                 override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
             })
@@ -165,6 +190,7 @@ fun AiScreen(live: Live, onBack: () -> Unit, onPeople: () -> Unit, onZones: () -
         TopBar("", null, onBack)
         PageTitle("Inteligência (IA)", "O computador olhando a câmera por você")
         val on = info?.optBoolean("enabled") == true
+        if (info == null) { Loading(); return@Page }
         Column(Modifier.fillMaxWidth().card(palette, selected = on).padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconBubble(Icons.Outlined.AutoAwesome, size = 40)
