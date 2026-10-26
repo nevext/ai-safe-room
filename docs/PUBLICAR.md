@@ -5,6 +5,13 @@ loja, quem faz cada parte e as decisões tomadas.
 
 ## Decisões
 
+- **O app abre como câmera normal, igual à TV** (direto na câmera). Toda função de IA (vídeo pelo camera-ai,
+  detecção, seguir, rostos, Proteção) vem desligada; a pessoa liga cada uma, e o app explica o que faz e que depende
+  da conexão da câmera. Hoje a IA do servidor liga sozinha: mudar no primeiro uso.
+- **Outras marcas são prioridade desde já**: o encaixe por marca é desenhado primeiro, XM e Tuya juntas, e a câmera
+  ONVIF genérica na rede de casa.
+- **Avisos pelo FCM** porque, no Android, é o único jeito de o aviso chegar com o app fechado sem um serviço ligado o
+  tempo todo (OneSignal e afins usam o FCM por baixo). Só a parte de mensagens do Firebase; banco e contas são nossos.
 - **O camera-ai roda num servidor na nuvem**, com banco de dados de verdade (Postgres). Nada de caixinha vendida
   nem PC ligado na casa da pessoa.
 - **O servidor chega na câmera pela nuvem do fabricante**, que é como os outros apps fazem (a câmera já fica
