@@ -348,9 +348,21 @@ class Hub(val root: String, val key: String?) {
 
         /** Signs in with camera-ai's password; returns the key (this phone's own, under its name). */
         fun login(root: String, password: String, name: String): String {
-            val reply = json("$root/api/login", JSONObject().put("password", password).put("name", name).toString(), allowError = true)
-            if (!reply.optBoolean("ok")) throw IOException(reply.optString("error", "senha errada"))
-            return reply.getString("key")
+            val where = root.removePrefix("http://").substringBefore(':')
+            val c = try { open("$root/api/login", JSONObject().put("password", password).put("name", name).toString(), 10_000).also { it.responseCode } }
+            catch (e: IOException) { throw IOException("Não consegui falar com o computador ($where). O celular está no mesmo Wi-Fi que ele?") }
+            try {
+                val code = c.responseCode
+                val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+                val reply = runCatching { JSONObject(text) }.getOrNull()
+                if (code == 200 && reply?.optBoolean("ok") == true) return reply.getString("key")
+                // Only a real "wrong password" says so; anything else says what happened
+                throw IOException(when (code) {
+                    401 -> "Senha errada. Confira os 8 números."
+                    429 -> "Muitas tentativas erradas: espere 1 minuto e tente de novo."
+                    else -> reply?.optString("error")?.ifEmpty { null }?.let { "O computador disse: $it" } ?: "O computador ($where) respondeu de um jeito estranho (código $code)."
+                })
+            } finally { c.disconnect() }
         }
 
         /** Asks to be let in: someone already in taps Allow on camera-ai. Returns the request's id. */

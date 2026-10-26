@@ -1249,6 +1249,8 @@ fun LetInScreen(root: String, onKey: (String) -> Unit, onCamera: () -> Unit, onB
     var status by remember { mutableStateOf("Esperando alguém permitir…") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+    var loggingIn by remember { mutableStateOf(false) }
+    var loginError by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
     androidx.activity.compose.BackHandler(onBack = onBack)
@@ -1292,16 +1294,26 @@ fun LetInScreen(root: String, onKey: (String) -> Unit, onCamera: () -> Unit, onB
         if (showPassword) {
             Text("É a senha de 8 números que o AI Safe Room criou quando foi instalado no computador (não é a do Wi-Fi nem a da câmera).",
                 color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
-            OutlinedTextField(password, { password = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                label = { Text("Senha do computador") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
-            Button(onClick = {
+            OutlinedTextField(password, { password = it; loginError = null }, singleLine = true, isError = loginError != null, enabled = !loggingIn,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp), label = { Text("Senha do computador") },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
+            // What happened, right under the field, in red
+            loginError?.let { Text(it, color = Red, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp)) }
+            Button(enabled = !loggingIn && password.isNotBlank(), onClick = {
+                loggingIn = true; loginError = null
                 scope.launch {
-                    withContext(Dispatchers.IO) { runCatching { Hub.login(root, password, "Celular " + Build.MODEL) } }
-                        .onSuccess(onKey).onFailure { status = it.message ?: "não deu" }
+                    withContext(Dispatchers.IO) { runCatching { Hub.login(root, password.trim(), "Celular " + Build.MODEL) } }
+                        .onSuccess(onKey).onFailure { loginError = it.message ?: "Não deu para entrar." }
+                    loggingIn = false
                 }
             }, colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) {
-                Text("Entrar")
+                if (loggingIn) {
+                    CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    Text("Entrando…", modifier = Modifier.padding(start = 10.dp))
+                } else Text("Entrar")
             }
+            Text("Computador: ${root.removePrefix("http://")}", color = palette.muted, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
         }
         // The camera works without the computer: no one needs to wait to see it
         TextButton(onClick = {
