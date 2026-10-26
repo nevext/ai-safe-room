@@ -361,6 +361,7 @@ async function autoOptimize() {
 // 1ª vez isto vira no-op — a câmera já nasce (reconecta) otimizada, sem botão.
 const TARGET = PROFILE.encoderTargets || { main: { fps: 20, bitrate: 4096 }, sub: { fps: 25, bitrate: 1024 } };
 async function maybeOptimize() {
+  if (perfil?.data.encodeBefore) return { applied: false };   // ajustada para Wi-Fi fraco (menos bits de propósito)
   const m = mainProfile(), s = subProfile();
   const below = (p, t) => p && p.encoding !== 'JPEG' && (+p.fps < t.fps || +p.bitrate < t.bitrate);
   if (below(m, TARGET.main) || (s !== m && below(s, TARGET.sub))) {
@@ -686,6 +687,44 @@ async function setCameraOwn(b) {
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Câmera: ${JSON.stringify(b)}`);
   return { ok: true, ...(await cameraOwn()) };
 }
+// Wi-Fi fraco: o que se recomenda para câmera em Wi-Fi (Frigate/go2rtc, fóruns de CFTV): taxa constante (CBR, sem
+// disparar quando algo se mexe), um quadro inteiro por segundo (GOP 1, sem o "GOP virtual" que espaçava para ~10 s:
+// um pedaço perdido congelava a imagem até o próximo) e um pouco menos de bits. A configuração de antes fica no perfil
+// para desfazer.
+async function wifiTune(undo = false) {
+  const session = await dvrSession();
+  const cur = (await session.request(1042, { Name: 'Simplify.Encode' }))['Simplify.Encode'];
+  if (!cur?.[0]) throw new Error('a câmera não mostrou a configuração de vídeo');
+  let next;
+  if (undo) {
+    next = perfil?.data.encodeBefore;
+    if (!next) return { ok: false, error: 'não há o que desfazer' };
+  } else {
+    if (perfil && !perfil.data.encodeBefore) { perfil.data.encodeBefore = cur; perfil.save(); }
+    next = cur.map(ch => ({
+      ...ch,
+      MainFormat: { ...ch.MainFormat, Video: { ...ch.MainFormat.Video, BitRateControl: 'CBR', GOP: 1, VirtualGOP: 1, BitRate: Math.min(ch.MainFormat.Video.BitRate, 3072) } },
+      ExtraFormat: { ...ch.ExtraFormat, Video: { ...ch.ExtraFormat.Video, BitRateControl: 'CBR', GOP: 1, VirtualGOP: 1, BitRate: Math.min(ch.ExtraFormat.Video.BitRate, 768) } },
+    }));
+  }
+  const r = await session.request(1040, { Name: 'Simplify.Encode', 'Simplify.Encode': next });
+  if (r.Ret !== 100 && r.Ret !== 603) throw new Error(`a câmera recusou (${r.Ret})`);
+  if (undo && perfil) { delete perfil.data.encodeBefore; perfil.save(); }
+  perfil?.event('video', undo ? 'Vídeo da câmera de volta ao de antes' : 'Vídeo da câmera ajustado para Wi-Fi (CBR, 1 quadro inteiro por segundo)');
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Vídeo da câmera: ${undo ? 'de volta ao de antes' : 'ajustado para Wi-Fi (CBR, GOP 1)'}`);
+  return { ok: true, tuned: !undo, ...wifiTuneInfo(next) };
+}
+function wifiTuneInfo(enc) {
+  const v = enc?.[0]?.MainFormat?.Video, sv = enc?.[0]?.ExtraFormat?.Video;
+  return { main: v && { control: v.BitRateControl, gop: v.GOP, virtualGop: v.VirtualGOP, kbps: v.BitRate, fps: v.FPS },
+    sub: sv && { control: sv.BitRateControl, gop: sv.GOP, virtualGop: sv.VirtualGOP, kbps: sv.BitRate, fps: sv.FPS } };
+}
+async function wifiTuneStatus() {
+  const cur = (await (await dvrSession()).request(1042, { Name: 'Simplify.Encode' }))['Simplify.Encode'];
+  const v = cur?.[0]?.MainFormat?.Video;
+  return { ok: true, tuned: v?.BitRateControl === 'CBR' && v?.GOP === 1 && v?.VirtualGOP === 1, canUndo: !!perfil?.data.encodeBefore, ...wifiTuneInfo(cur) };
+}
+
 // Relógio e reiniciar
 async function syncClock() {
   const d = new Date(), z = (n) => String(n).padStart(2, '0');
@@ -2232,6 +2271,7 @@ const server = http.createServer(async (req, res) => {
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
       case '/api/camera/own': return json(res, 200, req.method === 'POST' ? await setCameraOwn(await readBody(req)) : { ok: true, ...(await cameraOwn()) });
+      case '/api/camera/wifi-tune': return json(res, 200, req.method === 'POST' ? await wifiTune(!!(await readBody(req)).undo) : await wifiTuneStatus());
       case '/api/camera/clock': return json(res, 200, await syncClock());
       case '/api/camera/reboot': return json(res, 200, await rebootCamera());
       case '/api/talk': return talk(req, res);

@@ -294,6 +294,7 @@ fun DiagnosticsScreen(live: Live, onBack: () -> Unit) {
     Page {
         TopBar("", null, onBack)
         PageTitle("Diagnóstico", "Descubra o que está atrapalhando")
+        WifiTuneCard(hub)
         TESTS.forEach { (id, title, text) ->
             val r = results.value[id]
             Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette).padding(16.dp)) {
@@ -391,5 +392,48 @@ fun SummariesScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
             }
         }
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** "Vídeo leve para o Wi-Fi": what's recommended for cameras on Wi-Fi, one tap, and undo. */
+@Composable
+private fun WifiTuneCard(hub: Hub) {
+    val scope = rememberCoroutineScope()
+    var info by remember { mutableStateOf<JSONObject?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { info = withContext(Dispatchers.IO) { runCatching { hub.wifiTune() }.getOrNull() } }
+    val tuned = info?.optBoolean("tuned") == true
+    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette, selected = tuned).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBubble(Icons.Outlined.Wifi, size = 38)
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text("Vídeo da câmera para Wi-Fi", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text(if (tuned) "Ajustado: menos travadas e congelamentos" else "Se a imagem trava ou congela, deixe o vídeo mais leve para o Wi-Fi",
+                    color = if (tuned) Blue else palette.muted, fontSize = 12.sp)
+            }
+        }
+        Text("Taxa constante (não dispara quando algo se mexe), uma imagem inteira por segundo (se um pedaço se perde, volta logo) " +
+            "e um pouco menos de dados. É o que se recomenda para câmera no Wi-Fi. Dá para desfazer.", color = palette.muted, fontSize = 12.sp,
+            modifier = Modifier.padding(top = 8.dp))
+        info?.optJSONObject("main")?.let { m ->
+            Text("Agora: ${m.optString("control")}, ${m.optInt("kbps")} kbps, ${m.optInt("fps")} quadros/s", fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+        }
+        note?.let { Text(it, color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.End) {
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Blue)
+            else if (info != null) {
+                val undo = tuned && info?.optBoolean("canUndo") == true
+                if (!tuned || undo) OutlinedButton(onClick = {
+                    busy = true
+                    scope.launch {
+                        withContext(Dispatchers.IO) { runCatching { hub.setWifiTune(undo); hub.wifiTune() } }
+                            .onSuccess { info = it; note = if (undo) "Voltou ao de antes." else "Pronto: a imagem pode piscar uma vez enquanto a câmera aplica." }
+                            .onFailure { note = "Não deu: ${it.message}" }
+                        busy = false
+                    }
+                }) { Text(if (undo) "Desfazer" else "Ajustar", color = Blue) }
+            }
+        }
     }
 }

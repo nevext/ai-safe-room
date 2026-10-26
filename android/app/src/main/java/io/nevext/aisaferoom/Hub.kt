@@ -40,6 +40,9 @@ class Hub(val root: String, val key: String?) {
     fun cameraOwn(): JSONObject = json("$base/api/camera/own")
     fun setCameraOwn(body: JSONObject): JSONObject = json("$base/api/camera/own", body.toString())
     fun syncClock(): JSONObject = json("$base/api/camera/clock", "{}")
+    /** The camera's video made easier on Wi-Fi (constant bitrate, a whole frame every second), or back as it was. */
+    fun wifiTune(): JSONObject = json("$base/api/camera/wifi-tune")
+    fun setWifiTune(undo: Boolean): JSONObject = json("$base/api/camera/wifi-tune", JSONObject().put("undo", undo).toString(), timeoutMs = 30_000)
     fun reboot(): JSONObject = json("$base/api/camera/reboot", "{}")
     fun setCameraPassword(password: String): JSONObject = json("$base/api/camera-password", JSONObject().put("password", password).toString(), timeoutMs = 60_000)
     /** The room's sound (PCM 16 bits 8 kHz) and where to send the voice to talk through the camera. */
