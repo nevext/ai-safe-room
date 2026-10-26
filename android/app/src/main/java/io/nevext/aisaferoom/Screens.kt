@@ -847,14 +847,41 @@ fun AppearanceScreen(theme: String, setTheme: (String) -> Unit, onBack: () -> Un
 fun PrivacyScreen(onBack: () -> Unit) {
     Page {
         TopBar("", null, onBack)
-        PageTitle("Privacidade", "Dados e permissões")
-        Column(Modifier.fillMaxWidth().card(palette).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Tudo fica na sua casa.", fontWeight = FontWeight.SemiBold)
-            Text("O vídeo vai da câmera para o computador de casa e dele para este celular, pelo seu Wi-Fi. Nada vai para a internet.",
-                color = palette.muted, fontSize = 14.sp)
-            Text("As miniaturas das atividades ficam 7 dias no computador e depois são apagadas.", color = palette.muted, fontSize = 14.sp)
-            Text("Só entram aparelhos que alguém já de dentro permitiu, ou que sabem a senha.", color = palette.muted, fontSize = 14.sp)
-        }
+        PageTitle("Privacidade", "O que fica guardado, onde e os seus direitos")
+        PrivacyCard("Tudo fica na sua casa", listOf(
+            "O vídeo vai da câmera para este celular (e para o computador de casa, se você usar a IA). Nada vai para a nossa internet.",
+            "Não recebemos o seu vídeo, as suas imagens nem os rostos da sua casa.",
+        ))
+        PrivacyCard("O que é guardado e por quanto tempo", listOf(
+            "Vídeo ao vivo: não é guardado.",
+            "Atividades: 30 dias, no computador de casa. Miniaturas: 7 dias.",
+            "Rostos desconhecidos de uma visita (para o \"Quem é?\"): 7 dias.",
+            "Senha da câmera e chave de acesso: só neste celular, criptografadas. Não vão para backup nem para outro celular.",
+        ))
+        PrivacyCard("Rostos", listOf(
+            "Rosto é dado sensível (LGPD). Só é cadastrado com o consentimento da pessoa, marcado na hora.",
+            "Serve só para dizer quem chegou e para a Proteção avisar só de desconhecidos.",
+            "A pessoa sai quando quiser: em Pessoas conhecidas, apagar a pessoa apaga o rosto e a foto.",
+        ))
+        PrivacyCard("Se a câmera filma outras pessoas", listOf(
+            "Avise visitas e quem trabalha na casa (uma plaquinha basta) e não aponte a câmera para vizinhos.",
+        ))
+        PrivacyCard("Permissões", listOf(
+            "Internet e rede: falar com a câmera e o computador. Notificações: os avisos da Proteção, se você ligar.",
+            "Microfone: só enquanto você segura o botão de falar pela câmera.",
+        ))
+        PrivacyCard("Seus direitos", listOf(
+            "Ver, corrigir e apagar a qualquer momento: \"Foi engano\" nas atividades, Pessoas conhecidas, Família e aparelhos.",
+        ))
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun PrivacyCard(title: String, lines: List<String>) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, fontWeight = FontWeight.SemiBold)
+        lines.forEach { Text(it, color = palette.muted, fontSize = 13.sp) }
     }
 }
 
