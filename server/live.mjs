@@ -157,6 +157,17 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
       args.push('-map', '[oh]', '-f', 'rawvideo', '-pix_fmt', 'rgb24', `tcp://127.0.0.1:${servers[views.length + 3].address().port}`);
       let errors = '';
       ff = spawn(ffmpeg, args);
+      const startedAt = Date.now();
+      // Vigia: com gente assistindo e nada chegando há 15 s, a conexão travou (Wi-Fi da câmera caiu e voltou): de novo
+      const proc = ff, watch = setInterval(() => {
+        if (ff !== proc) return clearInterval(watch);
+        const last = Math.max(startedAt, ...views.map(v => stats[v].lastData));
+        if (anyone() && Date.now() - last > 15000) {
+          errors = 'nada chegou da câmera por 15 s';
+          clearInterval(watch);
+          try { proc.kill('SIGKILL'); } catch {}
+        }
+      }, 5000);
       ff.stderr.on('data', d => { errors = (errors + d).slice(-500); });
       ff.on('error', () => {});
       ff.on('close', code => {

@@ -32,7 +32,8 @@ const HAS_FFMPEG = spawnSync(FFMPEG, ['-version']).status === 0;
 
 // Ao vivo com o menor atraso: sem o buffer de entrada do ffmpeg e sem esperar segundos analisando o
 // stream antes de começar (o padrão junta ~5 s).
-const LIVE_IN = ['-fflags', 'nobuffer', '-flags', 'low_delay', '-probesize', '500000', '-analyzeduration', '500000', '-rtsp_transport', 'tcp'];
+const LIVE_IN = ['-fflags', 'nobuffer', '-flags', 'low_delay', '-probesize', '500000', '-analyzeduration', '500000', '-rtsp_transport', 'tcp',
+  '-timeout', '10000000'];   // 10 s sem nada da câmera: o ffmpeg desiste (e o vídeo recomeça) em vez de ficar pendurado
 
 // H.264 para as telas: na placa de vídeo se der (NVIDIA, Intel, AMD), senão no processador.
 // Cada encoder testado com um quadro de mentira; o primeiro que funcionar fica.
@@ -212,6 +213,7 @@ const publicState = () => ({
 
 // ---------- HTTP Digest (para snapshot JPEG) ----------
 async function httpGetDigest(uri) {
+  const fetch = (u, o = {}) => globalThis.fetch(u, { ...o, signal: AbortSignal.timeout(8000) });   // câmera sumida: desiste
   let r = await fetch(uri);
   if (r.status === 401) {
     const wa = r.headers.get('www-authenticate') || '';
@@ -232,14 +234,17 @@ async function httpGetDigest(uri) {
 }
 async function snapshot() {
   if (cam.snapUri) { try { return await httpGetDigest(cam.snapUri); } catch (e) { /* cai pro ffmpeg */ } }
-  if (HAS_FFMPEG && cam.streamUri) return ffmpegFrame(cam.streamUri);
+  // Pelo RTSP só com o vídeo ao vivo parado: seria uma segunda conexão, e a câmera aguenta uma (em 25/10 uma foto
+  // travada segurou o RTSP por uma hora e o ao vivo ficou "reconectando" para sempre)
+  if (HAS_FFMPEG && cam.streamUri && !live?.active) return ffmpegFrame(cam.streamUri);
   throw new Error('sem fonte de snapshot');
 }
 function ffmpegFrame(rtsp) {
   return new Promise((ok, err) => {
-    const ff = spawn(FFMPEG, ['-rtsp_transport', 'tcp', '-i', rtsp, '-frames:v', '1', '-f', 'image2', '-']);
+    const ff = spawn(FFMPEG, ['-loglevel', 'error', '-rtsp_transport', 'tcp', '-timeout', '5000000', '-i', rtsp, '-frames:v', '1', '-f', 'image2', '-']);
     const chunks = []; ff.stdout.on('data', d => chunks.push(d));
-    ff.on('close', c => c === 0 ? ok(Buffer.concat(chunks)) : err(new Error('ffmpeg frame ' + c)));
+    const giveUp = setTimeout(() => ff.kill('SIGKILL'), 10000);   // nunca fica pendurado na câmera
+    ff.on('close', c => { clearTimeout(giveUp); c === 0 ? ok(Buffer.concat(chunks)) : err(new Error('ffmpeg frame ' + c)); });
     ff.on('error', err);
   });
 }
