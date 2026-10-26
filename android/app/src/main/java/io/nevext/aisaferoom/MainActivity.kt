@@ -129,6 +129,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         visible.value = false
+        SharedVideo.reset()   // out of the app: the camera's connection closes now
         super.onStop()
     }
 }
@@ -354,6 +355,25 @@ fun rememberPicture(hub: Hub, url: String?): ImageBitmap? {
         if (url == null) return@LaunchedEffect
         image = withContext(Dispatchers.IO) {
             runCatching { hub.bytes(url).let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }.getOrNull()
+        }
+    }
+    return image
+}
+
+/**
+ * The camera's picture for the places that show it still (the camera list, while the video opens): the video's last
+ * picture right away, then the camera's snapshot, tried again until it comes (the camera may be busy closing a video)
+ * and refreshed every 30 s.
+ */
+@Composable
+fun rememberCameraPicture(hub: Hub): ImageBitmap? {
+    var image by remember(hub) { mutableStateOf(SharedVideo.lastFrame) }
+    LaunchedEffect(hub) {
+        while (true) {
+            withContext(Dispatchers.IO) {
+                runCatching { hub.bytes(hub.thumbUrl).let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }.getOrNull()
+            }?.let { image = it }
+            kotlinx.coroutines.delay(if (image == null) 3_000 else 30_000)
         }
     }
     return image

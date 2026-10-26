@@ -78,7 +78,8 @@ import java.util.Locale
 
 /**
  * The one camera player of the app, shared by the screens: switching screens keeps the picture playing. Released a
- * few seconds after no screen shows it (back to the home screen of the phone, a screen without video).
+ * minute after no screen shows it (Câmeras, Ajustes and back stay on the same connection), or as soon as the app leaves
+ * the screen.
  */
 @OptIn(UnstableApi::class)
 object SharedVideo {
@@ -115,7 +116,7 @@ object SharedVideo {
     }
     fun leave() {
         users = (users - 1).coerceAtLeast(0)
-        if (users == 0) { handler.removeCallbacks(releaseLater); handler.postDelayed(releaseLater, 4000) }
+        if (users == 0) { handler.removeCallbacks(releaseLater); handler.postDelayed(releaseLater, 60_000) }
     }
     fun reset() { player?.release(); player = null; url = null }
 }
@@ -235,7 +236,7 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
             Image(it, null, contentScale = ContentScale.FillBounds, modifier = Modifier.requiredSize(rw, fullH).offset(y = dy))
         }
         if (!playing) {
-            rememberPicture(hub, hub.thumbUrl)?.let {
+            rememberCameraPicture(hub)?.let {
                 Image(it, null, contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.6f)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {

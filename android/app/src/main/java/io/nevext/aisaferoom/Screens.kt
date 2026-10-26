@@ -207,7 +207,7 @@ private fun AiVideo(live: Live, view: String, visible: Boolean, modifier: Modifi
         val img = frame
         if (img == null) {
             // The camera's still while the video opens, so it isn't a black box
-            rememberPicture(hub, hub.thumbUrl)?.let {
+            rememberCameraPicture(hub)?.let {
                 Image(it, null, contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.6f)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -487,7 +487,7 @@ fun CamerasScreen(live: Live, onCamera: () -> Unit, onAdd: () -> Unit) {
         }
         Row(Modifier.fillMaxWidth().card(palette, selected = true).clickable(onClick = onCamera).padding(12.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            val thumb = rememberPicture(hub, hub.thumbUrl)
+            val thumb = rememberCameraPicture(hub)
             Box(Modifier.size(width = 84.dp, height = 64.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF0B0F17))) {
                 thumb?.let { Image(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
             }

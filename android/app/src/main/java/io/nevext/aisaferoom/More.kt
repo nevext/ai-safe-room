@@ -254,7 +254,7 @@ fun ZonesScreen(live: Live, onBack: () -> Unit) {
             for (i in 0 until a.length()) a.optJSONArray(i)?.let { z -> zones.add(FloatArray(4) { z.optDouble(it).toFloat() }) }
         }
     }
-    val picture = rememberPicture(hub, hub.thumbUrl)
+    val picture = rememberCameraPicture(hub)
     Page {
         TopBar("", null, onBack)
         PageTitle("Zonas para ignorar", "Arraste o dedo na imagem para marcar uma área")
