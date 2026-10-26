@@ -28,29 +28,72 @@ class Hub(val root: String, val key: String?) {
     /** Every address starts like this: root, plus /k/<key> once camera-ai let this phone in. */
     val base: String get() = if (key == null) root else "$root/k/$key"
 
-    /** What the camera offers now: lenses, video, AI, controls (/api/screen). Locked without a valid key. */
-    fun screen(): JSONObject = json(base + "/api/screen")
+    /**
+     * The camera straight from the phone, when the AI is off or the computer is away: then the camera's own things
+     * (controls, turning, snapshot, clock, password) don't go through the computer, like the camera's original app.
+     */
+    private val cam: CameraLink? get() = if (CameraLink.direct) CameraLink.current()?.takeIf { it.access != null } else null
+
+    /**
+     * What the camera offers now: lenses, video, AI, controls (/api/screen). Locked without a valid key. With the AI off
+     * the controls come from the camera itself; with the computer away (off, busy, another network) everything does.
+     */
+    fun screen(): JSONObject {
+        val link = CameraLink.current()
+        val known = link?.access != null
+        val pc = runCatching { json(base + "/api/screen", timeoutMs = if (known) 5_000 else 15_000) }
+        pc.getOrNull()?.let { info ->
+            CameraLink.direct = info.optJSONObject("ai")?.optBoolean("enabled") != true
+            if (link != null && (!known || link.access?.addr != info.optJSONObject("camera")?.optJSONArray("hosts")?.optString(0))) runCatching {
+                val a = json("$base/api/camera/access")
+                link.remember(CameraLink.Access(a.getString("addr"), a.optString("user", "admin"), a.optString("pass"), a.optString("serial"),
+                    a.optString("name", "Câmera"), a.optBoolean("twoLenses")))
+            }
+            if (CameraLink.direct && link?.access != null) runCatching {
+                info.put("controls", link.controls()); info.put("cameraPerson", link.person() == true)
+            }
+            return info
+        }
+        val error = pc.exceptionOrNull() ?: IOException("sem resposta")
+        if (error is Locked || link?.access == null) throw error
+        CameraLink.direct = true
+        return link.screenInfo()
+    }
 
     /** How the camera and the AI are connected: grade 0–3 (Péssimo, Regular, Bom, Ótimo) and a line of detail. */
     fun connection(): JSONObject = json("$base/api/connection")
 
     /** Turn the lens: dir up/down/left/right with action start/stop; "home" goes to the saved position, "sethome" saves it. */
-    fun ptz(dir: String, action: String) { json("$base/api/ptz", JSONObject().put("dir", dir).put("action", action).toString()) }
+    fun ptz(dir: String, action: String) { cam?.let { it.ptz(dir, action); return }; json("$base/api/ptz", JSONObject().put("dir", dir).put("action", action).toString()) }
     /** What the camera does by itself: its person detection, its follow, the SD card. */
-    fun cameraOwn(): JSONObject = json("$base/api/camera/own")
-    fun setCameraOwn(body: JSONObject): JSONObject = json("$base/api/camera/own", body.toString())
-    fun syncClock(): JSONObject = json("$base/api/camera/clock", "{}")
+    fun cameraOwn(): JSONObject = cam?.let { c ->
+        JSONObject().put("ok", true).apply { c.person()?.let { put("person", it) }; c.track()?.let { put("track", it) }
+            put("sd", c.sdMb().takeIf { it > 0 }?.let { JSONObject().put("mb", it) } ?: JSONObject.NULL) }
+    } ?: json("$base/api/camera/own")
+    fun setCameraOwn(body: JSONObject): JSONObject = cam?.let { c ->
+        if (body.has("person")) c.setPerson(body.getBoolean("person"))
+        if (body.has("track")) c.setTrack(body.getBoolean("track"))
+        cameraOwn()
+    } ?: json("$base/api/camera/own", body.toString())
+    fun syncClock(): JSONObject = cam?.let { JSONObject().put("ok", true).put("time", it.syncClock()) } ?: json("$base/api/camera/clock", "{}")
     /** The camera's video made easier on Wi-Fi (constant bitrate, a whole frame every second), or back as it was. */
     fun wifiTune(): JSONObject = json("$base/api/camera/wifi-tune")
     fun setWifiTune(undo: Boolean): JSONObject = json("$base/api/camera/wifi-tune", JSONObject().put("undo", undo).toString(), timeoutMs = 30_000)
-    fun reboot(): JSONObject = json("$base/api/camera/reboot", "{}")
-    fun setCameraPassword(password: String): JSONObject = json("$base/api/camera-password", JSONObject().put("password", password).toString(), timeoutMs = 60_000)
+    fun reboot(): JSONObject = cam?.let { it.reboot(); JSONObject().put("ok", true) } ?: json("$base/api/camera/reboot", "{}")
+    /** The camera's password: through the computer when it's there (it reconnects with the new one), else straight. */
+    fun setCameraPassword(password: String): JSONObject = runCatching {
+        json("$base/api/camera-password", JSONObject().put("password", password).toString(), timeoutMs = 60_000)
+            .also { if (it.optBoolean("ok")) CameraLink.current()?.let { l -> l.access?.let { a -> l.remember(a.copy(pass = password)) } } }
+    }.getOrElse { e ->
+        val l = CameraLink.current()?.takeIf { it.access != null } ?: throw e
+        l.changePassword(password); JSONObject().put("ok", true)
+    }
     /** The room's sound (PCM 16 bits 8 kHz) and where to send the voice to talk through the camera. */
     val audioUrl get() = "$base/api/screen/audio"
     val talkUrl get() = "$base/api/talk"
 
     /** The camera's RTSP addresses (with its login), to watch direct without the AI. */
-    fun directStream(): JSONObject = json("$base/api/screen/direct-stream")
+    fun directStream(): JSONObject = CameraLink.current()?.takeIf { it.access != null }?.directStream() ?: json("$base/api/screen/direct-stream")
     /** The AI: on or off (off by default), its features and the rigor. */
     fun ai(): JSONObject = json("$base/api/ai")
     fun setAi(body: JSONObject): JSONObject = json("$base/api/ai", body.toString())
@@ -63,6 +106,7 @@ class Hub(val root: String, val key: String?) {
 
     /** Changes one control (night vision, white light, follow…); returns all controls as they are now. */
     fun control(id: String, value: Any): JSONArray {
+        cam?.let { c -> if (id in setOf("night", "light", "camTrack")) { c.control(id, value == true); return c.controls() } }
         val reply = json(base + "/api/screen/control", JSONObject().put("id", id).put("value", value).toString())
         if (!reply.optBoolean("ok")) throw IOException(reply.optString("error", "não deu"))
         return reply.optJSONArray("controls") ?: JSONArray()
@@ -150,6 +194,7 @@ class Hub(val root: String, val key: String?) {
 
     /** Raw bytes of a picture (snapshot, thumbnail). */
     fun bytes(url: String): ByteArray {
+        if (url == thumbUrl) cam?.let { c -> runCatching { return c.snapshot() } }   // the camera's own snapshot, fast
         val c = open(url, null, 15_000)
         try {
             if (c.responseCode == 401) throw Locked()

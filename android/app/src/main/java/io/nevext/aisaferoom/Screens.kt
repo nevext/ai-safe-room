@@ -383,7 +383,7 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
             Icon(Icons.Outlined.Settings, "Sistema", Modifier.clip(CircleShape).clickable(onClick = onSystem).padding(8.dp))
         }
         Box(Modifier.padding(top = 6.dp, bottom = 14.dp)) {
-            StatusDot(live.connected, if (live.connected) "Sistema conectado · 1 câmera ativa" else live.problem ?: "Conectando…")
+            StatusDot(live.connected, when { !live.connected -> live.problem ?: "Conectando…"; live.info?.optBoolean("phoneOnly") == true -> "Direto na câmera · o computador está fora"; else -> "Sistema conectado · 1 câmera ativa" })
         }
         // Shortcut: how the connection is, and a tap goes to Ajustes → Conexão (reconnect there)
         ConnectionShortcut(hub, visible, onSystem)

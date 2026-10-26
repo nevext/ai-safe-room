@@ -2270,6 +2270,10 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, perfilInfo());
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
+      // O app guarda isto para falar com a câmera sozinho (sem o computador), como o app original dela; só para
+      // aparelhos que já entraram (a senha da câmera já ia no endereço do vídeo direto)
+      case '/api/camera/access': return cam.addr ? json(res, 200, { ok: true, addr: cam.addr, user: cam.user, pass: cam.pass, serial: cam.info.serial,
+        name: perfil?.data.name || 'Câmera', twoLenses: PROFILE.lenses?.count === 2 }) : json(res, 503, { error: 'a câmera não está conectada' });
       case '/api/camera/own': return json(res, 200, req.method === 'POST' ? await setCameraOwn(await readBody(req)) : { ok: true, ...(await cameraOwn()) });
       case '/api/camera/wifi-tune': return json(res, 200, req.method === 'POST' ? await wifiTune(!!(await readBody(req)).undo) : await wifiTuneStatus());
       case '/api/camera/clock': return json(res, 200, await syncClock());

@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("aisaferoom", Context.MODE_PRIVATE)
+        CameraLink.get(this)   // the camera straight from the phone (without the computer)
         asked.value = intent?.getStringExtra("open")
         // The warnings keep going with the app closed, if they were on
         if (prefs.getBoolean("notify", false)) runCatching { Guard.start(this) }

@@ -183,6 +183,13 @@ fun TalkButton(live: Live, onNote: (String) -> Unit, modifier: Modifier = Modifi
                 val size = maxOf(AudioRecord.getMinBufferSize(8000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), 1280)
                 val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 8000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
                 runCatching {
+                    // Without the AI the phone talks to the camera itself (the computer may be off)
+                    val direct = CameraLink.current()?.takeIf { CameraLink.direct && it.access != null }
+                    if (direct != null) {
+                        rec.startRecording()
+                        direct.talk({ b, o, n -> rec.read(b, o, n) }, { running })
+                        return@runCatching
+                    }
                     val c = URL(hub.talkUrl).openConnection() as HttpURLConnection
                     c.requestMethod = "POST"; c.doOutput = true; c.setChunkedStreamingMode(640)
                     c.setRequestProperty("content-type", "application/octet-stream")
