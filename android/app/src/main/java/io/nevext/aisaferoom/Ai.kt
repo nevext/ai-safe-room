@@ -105,12 +105,21 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     var light by remember(hub) { mutableStateOf<Boolean?>(null) }   // the light video (sub): the phone can't keep up with the big one
     var stalls by remember { mutableIntStateOf(0) }
     LaunchedEffect(hub, visible, attempt, light) {
+        // The camera's address is kept on the phone: the plain camera is phone and camera only, it doesn't wait for the
+        // computer (busy with a game, off). The computer is asked in the background, in case the address changed.
         if (visible && url == null) url = withContext(Dispatchers.IO) {
-            runCatching {
-                val s = hub.directStream()
-                val useLight = light ?: !decodesBig(s.optInt("width", 3072), s.optInt("height", 2048)).also { light = !it }
-                s.optString(if (useLight) "sub" else "main").ifEmpty { null }
-            }.getOrNull()
+            val prefs = context.getSharedPreferences("aisaferoom", android.content.Context.MODE_PRIVATE)
+            val kept = prefs.getString("directStream", null)?.let { runCatching { JSONObject(it) }.getOrNull() }
+            val fresh = if (kept != null && attempt == 0) null
+                else runCatching { hub.directStream().also { prefs.edit().putString("directStream", it.toString()).apply() } }.getOrNull()
+            val s = fresh ?: kept ?: return@withContext null
+            val useLight = light ?: !decodesBig(s.optInt("width", 3072), s.optInt("height", 2048)).also { light = !it }
+            s.optString(if (useLight) "sub" else "main").ifEmpty { null }
+        }
+        if (attempt == 0 && visible) launch(Dispatchers.IO) {
+            runCatching { hub.directStream() }.onSuccess {
+                context.getSharedPreferences("aisaferoom", android.content.Context.MODE_PRIVATE).edit().putString("directStream", it.toString()).apply()
+            }
         }
         if (url == null && visible) { delay(3000); attempt++ }
     }

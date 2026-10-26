@@ -21,6 +21,7 @@ export async function dvrip(host, user = 'admin', password = '', port = 34567) {
   let buffer = Buffer.alloc(0);
   let pending = [];
   let queue = Promise.resolve();
+  let silent = 0;   // pedidos seguidos sem resposta
   const listeners = new Set();   // mensagens que a câmera manda sem pedido (alarmes: 1504)
 
   const failAll = error => {
@@ -91,10 +92,19 @@ export async function dvrip(host, user = 'admin', password = '', port = 34567) {
     header[13] = 0;
     header.writeUInt16LE(messageId, 14);
     header.writeUInt32LE(json.length, 16);
-    pending.push({ messageId: messageId + 1, resolve, reject });
+    // Sem resposta em 10 s, desiste deste pedido: senão a fila inteira fica esperando para sempre (26/10: a câmera
+    // ocupada deixou um pedido sem resposta e o /api/screen travou)
+    const timer = setTimeout(() => {
+      const index = pending.findIndex(item => item.resolve === done);
+      if (index >= 0) pending.splice(index, 1);
+      reject(new Error('a câmera não respondeu a tempo (DVRIP)'));
+      if (++silent >= 2) socket.destroy();   // duas sem resposta: a sessão morreu; quem usa abre outra
+    }, 10000);
+    const done = (value) => { clearTimeout(timer); silent = 0; resolve(value); };
+    pending.push({ messageId: messageId + 1, resolve: done, reject: (e) => { clearTimeout(timer); reject(e); } });
     socket.write(Buffer.concat([header, json]), error => {
       if (error) {
-        const index = pending.findIndex(item => item.resolve === resolve);
+        const index = pending.findIndex(item => item.resolve === done);
         if (index >= 0) pending.splice(index, 1);
         reject(error);
       }

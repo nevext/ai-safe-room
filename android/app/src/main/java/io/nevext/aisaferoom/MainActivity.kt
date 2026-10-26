@@ -262,7 +262,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             is Screen.LetIn -> LetInScreen(s.root, onKey = { keep(Hub(s.root, it)) }, onBack = { screen = Screen.Find })
             Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, live.unseen, onTab = { tab = it; screen = it }) {
                 when (s) {
-                    Screen.Home -> HomeScreen(live, visible, onCamera = { open(Screen.Camera) }, onSystem = { open(Screen.System) },
+                    Screen.Home -> HomeScreen(live, visible && fullscreen == null, onCamera = { open(Screen.Camera) }, onSystem = { open(Screen.System) },
                         onActivity = { tab = Screen.Activity; screen = Screen.Activity }, onFullscreen = { fullscreen = "whole" },
                         onProtection = { open(Screen.Protection) }, onAi = { open(Screen.Ai) })
                     Screen.Cameras -> CamerasScreen(live, onCamera = { open(Screen.Camera) }, onAdd = { open(Screen.Find) })
@@ -272,7 +272,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             }
             Screen.Camera -> if (h != null) {
                 BackHandler(onBack = back)
-                CameraScreen(live, visible, onBack = back, onFeatures = { open(Screen.Features) }, onFullscreen = { fullscreen = it })
+                CameraScreen(live, visible && fullscreen == null, onBack = back, onFeatures = { open(Screen.Features) }, onFullscreen = { fullscreen = it })
             }
             Screen.Features -> if (h != null) {
                 val from = { screen = if (previous == Screen.Camera) Screen.Camera else tab }
