@@ -217,7 +217,7 @@ class CameraLink private constructor(private val context: Context) {
         val a = access ?: throw IOException("o app ainda não conhece a câmera")
         val controls = controls()   // also proves the camera answers
         return JSONObject()
-            .put("camera", JSONObject().put("connected", true).put("name", a.name).put("kind", "Câmera").put("serial", a.serial))
+            .put("camera", JSONObject().put("connected", true).put("name", a.name).put("kind", "Câmera").put("serial", a.serial).put("blankPass", a.pass.isEmpty()))
             .put("lenses", JSONObject().put("count", if (a.twoLenses) 2 else 1))
             .put("ai", JSONObject().put("enabled", false).put("status", "off"))
             .put("controls", controls)

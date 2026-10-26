@@ -398,6 +398,10 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
         }
         // Shortcut: how the connection is, and a tap goes to Ajustes → Conexão (reconnect there)
         ConnectionShortcut(hub, visible, onSystem)
+        // No password on the camera: anyone on the Wi-Fi gets in. Owners create one here (not alone if a computer holds the camera)
+        val pcSeen = LocalContext.current.getSharedPreferences("aisaferoom", android.content.Context.MODE_PRIVATE).getString("pcSeen", null)
+        if (live.owner && live.info?.optJSONObject("camera")?.optBoolean("blankPass") == true &&
+            (live.info?.optBoolean("phoneOnly") != true || pcSeen == null)) CreateCameraPassword(live)
 
         // The state of the house first: someone showed up, the camera isn't looking, or all calm
         val recent = (0 until live.activity.length()).mapNotNull { live.activity.optJSONObject(it) }
@@ -1160,6 +1164,7 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
         if (!searching) return@LaunchedEffect
         found = withContext(Dispatchers.IO) { runCatching { Hub.discover(context) }.getOrDefault(emptyList()) }
         searching = false
+        found.firstOrNull { !it.camera }?.let { context.getSharedPreferences("aisaferoom", android.content.Context.MODE_PRIVATE).edit().putString("pcSeen", it.root).apply() }
         // The computer if there is one (it has the AI too); else the camera straight, like its own app
         val pcs = found.filter { !it.camera }
         val cams = found.filter { it.camera }
@@ -1198,7 +1203,18 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
             TextButton(onClick = { searching = true }) { Text("Procurar de novo", color = Blue) }
         }
         locked?.let { addr ->
-            Text("A câmera em $addr tem senha. Digite a senha dela (a mesma do app da marca).", fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+            var forgot by remember { mutableStateOf(false) }
+            Column(Modifier.fillMaxWidth().padding(top = 8.dp).card(palette).padding(16.dp)) {
+                Text("Achei a câmera, mas ela tem senha", fontWeight = FontWeight.SemiBold)
+                Text("É a senha que alguém pôs na câmera pelo app da marca (iCSee, XMEye…), não a do Wi-Fi. Câmera nova vem sem senha; " +
+                    "se pede, alguém já colocou uma.", color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+                Text(if (forgot) "Esconder" else "Não sei a senha", color = Blue, fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 8.dp).clickable { forgot = !forgot })
+                if (forgot) Text("1. Pergunte a quem instalou a câmera.\n" +
+                    "2. Se ninguém sabe: com a câmera ligada, aperte o botão de reset (um furinho ou botão perto do cartão de memória) por uns 10 segundos, até ela falar ou piscar.\n" +
+                    "3. Ela volta a ficar sem senha, mas sai do Wi-Fi: ponha no Wi-Fi de novo pelo app da marca e volte aqui. O AI Safe Room entra sozinho e ajuda a criar uma senha nova.",
+                    color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+            }
             OutlinedTextField(cameraPassword, { cameraPassword = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 label = { Text("Senha da câmera") }, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
@@ -1228,9 +1244,11 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
 }
 
 @Composable
-fun LetInScreen(root: String, onKey: (String) -> Unit, onBack: () -> Unit) {
-    var status by remember { mutableStateOf("Esperando a permissão…") }
+fun LetInScreen(root: String, onKey: (String) -> Unit, onCamera: () -> Unit, onBack: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var status by remember { mutableStateOf("Esperando alguém permitir…") }
     var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
     var attempt by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
     androidx.activity.compose.BackHandler(onBack = onBack)
@@ -1246,32 +1264,117 @@ fun LetInScreen(root: String, onKey: (String) -> Unit, onBack: () -> Unit) {
                 }
                 key
             }
-        }.onSuccess { key -> if (key != null) onKey(key) else status = "O pedido expirou." }
-            .onFailure { status = it.message ?: "não deu" }
+        }.onSuccess { key -> if (key != null) onKey(key) else status = "O pedido expirou. Toque em De novo." }
+            .onFailure { status = if (it.message == "recusado") "Recusaram este celular." else it.message ?: "não deu" }
     }
     Page {
         TopBar("", null, onBack)
-        Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Logo(73.dp)
-            Text("Liberar este celular", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
-            Text("No computador (${root.removePrefix("http://")}), toque em Permitir.", color = palette.muted, fontSize = 13.sp,
-                textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+        Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Logo(64.dp)
+            Text("Achei o computador da casa", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 14.dp))
+            Text("Ele cuida da câmera e da IA, e só deixa entrar quem a casa liberar. É uma vez só por celular.",
+                color = palette.muted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
         }
         Row(Modifier.fillMaxWidth().card(palette).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(Modifier.size(18.dp), color = Blue, strokeWidth = 2.dp)
             Text(status, modifier = Modifier.weight(1f).padding(start = 12.dp), fontSize = 14.sp)
-            TextButton(onClick = { status = "Esperando a permissão…"; attempt++ }) { Text("De novo", color = Blue) }
+            TextButton(onClick = { status = "Esperando alguém permitir…"; attempt++ }) { Text("De novo", color = Blue) }
         }
-        Text("Ou com a senha", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 24.dp))
-        OutlinedTextField(password, { password = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            label = { Text("Senha") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
-        Button(onClick = {
-            scope.launch {
-                withContext(Dispatchers.IO) { runCatching { Hub.login(root, password, "Celular " + Build.MODEL) } }
-                    .onSuccess(onKey).onFailure { status = it.message ?: "não deu" }
+        Text("Como liberar", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+        Column(Modifier.fillMaxWidth().card(palette).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("No computador (${root.removePrefix("http://").substringBefore(':')}): abriu uma página do AI Safe Room perguntando se este celular pode entrar. Toque em OK.\n" +
+                "Se não abriu, abra o navegador do computador em 127.0.0.1:8787.", fontSize = 13.sp)
+            Text("Ou num celular que já usa o AI Safe Room: chega uma notificação \"Celular ${Build.MODEL} quer entrar\". Toque em Permitir.",
+                fontSize = 13.sp, color = palette.muted)
+        }
+        Text(if (showPassword) "Esconder" else "Tenho a senha do computador", color = Blue, fontSize = 13.sp,
+            modifier = Modifier.padding(top = 16.dp).clickable { showPassword = !showPassword })
+        if (showPassword) {
+            Text("É a senha de 8 números que o AI Safe Room criou quando foi instalado no computador (não é a do Wi-Fi nem a da câmera).",
+                color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+            OutlinedTextField(password, { password = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                label = { Text("Senha do computador") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
+            Button(onClick = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { runCatching { Hub.login(root, password, "Celular " + Build.MODEL) } }
+                        .onSuccess(onKey).onFailure { status = it.message ?: "não deu" }
+                }
+            }, colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) {
+                Text("Entrar")
             }
-        }, colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) {
-            Text("Entrar")
         }
+        // The camera works without the computer: no one needs to wait to see it
+        TextButton(onClick = {
+            status = "Procurando a câmera…"
+            scope.launch {
+                val cam = withContext(Dispatchers.IO) { runCatching { Hub.discover(context).firstOrNull { it.camera } }.getOrNull() }
+                if (cam == null) { status = "Não achei a câmera sozinha no Wi-Fi."; return@launch }
+                withContext(Dispatchers.IO) { runCatching { Hub.tryCamera(context, cam.root) } }
+                    .onSuccess { onCamera() }
+                    .onFailure { status = if (it.message?.contains("recusou o login") == true) "A câmera tem senha: volte e entre por ela." else "A câmera não respondeu." }
+            }
+        }, modifier = Modifier.padding(top = 12.dp)) {
+            Text("Ver só a câmera agora (sem a IA)", color = palette.muted, fontSize = 13.sp)
+        }
+        Spacer(Modifier.height(20.dp))
     }
+}
+
+/** "A câmera está sem senha": what it means, and a password made for the person (nobody needs to remember it). */
+@Composable
+private fun CreateCameraPassword(live: Live) {
+    val hub = live.hub ?: return
+    val scope = rememberCoroutineScope()
+    var open by remember { mutableStateOf(false) }
+    var later by remember { mutableStateOf(false) }
+    var own by remember { mutableStateOf(false) }      // the person types one instead
+    var typed by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
+    if (later) return
+    Row(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette, selected = true).clickable { open = true }.padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        IconBubble(Icons.Outlined.Lock, Orange, Color(0x22F97316), size = 40)
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text("A câmera está sem senha", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Text("Toque para proteger (1 minuto)", color = palette.muted, fontSize = 12.sp)
+        }
+        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = palette.muted)
+    }
+    if (open) androidx.compose.material3.AlertDialog(onDismissRequest = { if (!busy) open = false },
+        title = { Text("Proteger a câmera com senha") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Hoje a câmera aceita qualquer um que esteja no seu Wi-Fi: um vizinho com a senha do Wi-Fi ou um aparelho invadido conseguiria ver e mexer nela.", fontSize = 13.sp)
+                Text("O AI Safe Room cria uma senha forte e guarda ela criptografada neste celular${if (live.info?.optBoolean("phoneOnly") == true) "" else " e no computador"}. " +
+                    "Você não precisa decorar nem digitar: o app${if (live.info?.optBoolean("phoneOnly") == true) "" else ", a TV e os celulares da família"} continuam funcionando.", fontSize = 13.sp, color = palette.muted)
+                Text("Só o app da marca (iCSee, XMEye) vai pedir a senha nova. Ela fica em Câmera → ⚙ → A própria câmera.", fontSize = 12.sp, color = palette.muted)
+                if (own) OutlinedTextField(typed, { typed = it }, singleLine = true, label = { Text("Senha (6 a 15 letras ou números)") },
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
+                else Text("Prefiro escolher a senha", color = Blue, fontSize = 13.sp, modifier = Modifier.clickable { own = true })
+                note?.let { Text(it, color = Red, fontSize = 13.sp) }
+                if (busy) Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), color = Blue, strokeWidth = 2.dp)
+                    Text("Pondo a senha na câmera…", fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+        },
+        confirmButton = {
+            Button(enabled = !busy, onClick = {
+                val password = if (own) typed.trim() else {
+                    val chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+                    val r = java.security.SecureRandom()
+                    (1..12).map { chars[r.nextInt(chars.length)] }.joinToString("")
+                }
+                if (password.length !in 6..15 || !password.all { it.isLetterOrDigit() }) { note = "Use de 6 a 15 letras ou números."; return@Button }
+                busy = true; note = null
+                scope.launch {
+                    withContext(Dispatchers.IO) { runCatching { val r = hub.setCameraPassword(password); if (!r.optBoolean("ok")) throw java.io.IOException(r.optString("error", "a câmera recusou")); hub.screen() } }
+                        .onSuccess { live.info = it; open = false; later = true; live.problem = null }
+                        .onFailure { note = "Não deu: ${it.message}" }
+                    busy = false
+                }
+            }, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Criar senha") }
+        },
+        dismissButton = { TextButton(enabled = !busy, onClick = { open = false; later = true }) { Text("Agora não", color = palette.muted) } })
 }

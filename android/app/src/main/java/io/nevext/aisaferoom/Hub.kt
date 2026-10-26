@@ -263,8 +263,8 @@ class Hub(val root: String, val key: String?) {
             val mine = wifi?.let { cm.getLinkProperties(it) }?.linkAddresses?.firstOrNull { it.address is Inet4Address }
             val found = LinkedHashMap<String, Found>()
             runCatching { found.putAll(ask(wifi, mine, waitMs).associateBy { it.root }) }
-            mine?.let { knock(wifi, it.address as Inet4Address) }?.forEach { f -> if (f.camera || f.root !in found) found[f.root] = f }
-            // The same camera seen by camera-ai: the computer is enough
+            // The computer answered the ask: it's enough (it holds the camera). Else knock on every address (~3 s)
+            if (found.isEmpty()) mine?.let { knock(wifi, it.address as Inet4Address) }?.forEach { f -> found[f.root] = f }
             return found.values.toList()
         }
 
@@ -324,7 +324,7 @@ class Hub(val root: String, val key: String?) {
                     }.getOrDefault(false)) found.add(Found("http://$host:8787", null))
             }
             pool.shutdown()
-            pool.awaitTermination(8, TimeUnit.SECONDS)
+            pool.awaitTermination(6, TimeUnit.SECONDS)
             return found.toList()
         }
 

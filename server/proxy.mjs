@@ -1956,7 +1956,7 @@ async function screenInfo() {
   return {
     version: SCREEN_VERSION, hub: 'camera-ai',
     camera: { connected: !!cam.addr, name: perfil?.data.name || 'Câmera', kind: PROFILE.name || cam.info.model || null, model: cam.info.model || null,
-      serial: cam.info.serial || null, hosts: cam.addr ? [cam.addr] : [] },
+      serial: cam.info.serial || null, hosts: cam.addr ? [cam.addr] : [], blankPass: !!cam.addr && cam.pass === '' },
     lenses: PROFILE.lenses || null,
     video: HAS_FFMPEG ? { mjpeg: '/api/screen/video', formats: live ? ['ts', 'mjpeg'] : H264 ? ['h264', 'mjpeg'] : ['mjpeg'],
       views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'] } : null,
@@ -2197,6 +2197,11 @@ function accessRequest(req, name) {
   requests.set(r.id, r);
   console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${ip}) pediu acesso: permita no navegador do PC ou do celular`);
   broadcast({ type: 'access', item: { id: r.id, name: r.name, ip } });   // os celulares avisam, com Permitir e Recusar
+  // Primeiro celular (ninguém para tocar em Permitir): abre a página no próprio PC, com a pergunta
+  if (!owners() && Date.now() - (accessRequest.opened || 0) > 120000 && process.platform === 'win32') {
+    accessRequest.opened = Date.now();
+    spawn('cmd', ['/c', 'start', '', `http://127.0.0.1:${PORT}/`], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  }
   return { ok: true, id: r.id };
 }
 function accessStatus(id) {
@@ -2210,7 +2215,8 @@ function accessAnswer(id, allow, role, hours) {
   if (!r) return { ok: false, error: 'o pedido expirou' };
   if (allow && role === 'owner' && owners() >= MAX_OWNERS) return { ok: false, error: `já tem ${MAX_OWNERS} donos` };
   r.status = allow ? 'ok' : 'no';
-  r.role = ['owner', 'member', 'guest'].includes(role) ? role : 'member';
+  // Sem dizer o papel (a página do PC): o primeiro vira dono, os outros membros
+  r.role = ['owner', 'member', 'guest'].includes(role) ? role : owners() ? 'member' : 'owner';
   r.hours = hours;
   console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${r.ip}): acesso ${allow ? 'permitido' : 'recusado'}`);
   return { ok: true };

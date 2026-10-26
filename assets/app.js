@@ -336,9 +336,9 @@ setInterval(async () => {
   for (const r of list) {
     if (answered.has(r.id)) continue;
     answered.add(r.id);
-    const allow = confirm(`${r.name} (${r.ip}) quer ver a câmera.
+    const allow = confirm(`${r.name} (${r.ip}) quer entrar no AI Safe Room.
 
-Permitir?`);
+Se é o seu celular (ou de alguém da casa) que acabou de abrir o app, toque em OK para permitir.`);
     try { await api('/api/access/answer', { method:'POST', body: JSON.stringify({ id: r.id, allow }) }); toast(allow ? 'Permitido.' : 'Recusado.'); } catch {}
   }
 }, 4000);

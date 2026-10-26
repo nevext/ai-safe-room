@@ -286,7 +286,8 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 FindScreen(onFound = { root, inside -> if (inside) keep(Hub(root, null)) else screen = Screen.LetIn(root) },
                     onCamera = { keep(Hub(Hub.CAMERA_ONLY, null)) }, onBack = if (h != null) back else null)
             }
-            is Screen.LetIn -> LetInScreen(s.root, onKey = { keep(Hub(s.root, it)) }, onBack = { screen = Screen.Find })
+            is Screen.LetIn -> LetInScreen(s.root, onKey = { keep(Hub(s.root, it)) }, onCamera = { keep(Hub(Hub.CAMERA_ONLY, null)) },
+                onBack = { screen = Screen.Find })
             Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, live.unseen, onTab = { tab = it; screen = it }) {
                 when (s) {
                     Screen.Home -> HomeScreen(live, visible && fullscreen == null, onCamera = { open(Screen.Camera) }, onSystem = { open(Screen.System) },
