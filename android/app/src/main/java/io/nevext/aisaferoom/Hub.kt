@@ -1,5 +1,15 @@
 package io.nevext.aisaferoom
 
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executors
+import java.net.Socket
+import java.net.InetSocketAddress
+import java.net.Inet4Address
+import android.net.NetworkCapabilities
+import android.net.Network
+import android.net.LinkAddress
+import android.net.ConnectivityManager
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -13,8 +23,8 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import kotlin.concurrent.thread
 
-/** A camera-ai found on the home network. */
-data class Found(val root: String, val serial: String?)
+/** Found on the home Wi-Fi: a camera-ai (the computer, [root]) or, with [camera], a camera itself at [root] (its address). */
+data class Found(val root: String, val serial: String?, val camera: Boolean = false)
 
 /** camera-ai said this phone has no key (or its password changed). */
 class Locked : IOException("camera-ai pede acesso")
@@ -240,14 +250,33 @@ class Hub(val root: String, val key: String?) {
 
         const val DISCOVERY_PORT = 8788
 
-        /** Asks the network "camera-ai?" and collects who answers for waitMs. */
-        fun discover(waitMs: Long = 1500): List<Found> {
+        /**
+         * Everything on the home Wi-Fi: the computer (camera-ai) and the cameras themselves, so nobody types an address.
+         * First the quick ask ("camera-ai?" to everyone, on the Wi-Fi itself, not the mobile data), then a knock on every
+         * address of the Wi-Fi for camera-ai (8787) and XM cameras (34567): some routers drop the ask between devices.
+         */
+        fun discover(context: Context, waitMs: Long = 1500): List<Found> {
+            val cm = context.getSystemService(ConnectivityManager::class.java)
+            val wifi = cm.allNetworks.firstOrNull { n ->
+                cm.getNetworkCapabilities(n)?.let { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) } == true
+            }
+            val mine = wifi?.let { cm.getLinkProperties(it) }?.linkAddresses?.firstOrNull { it.address is Inet4Address }
+            val found = LinkedHashMap<String, Found>()
+            runCatching { found.putAll(ask(wifi, mine, waitMs).associateBy { it.root }) }
+            mine?.let { knock(wifi, it.address as Inet4Address) }?.forEach { f -> if (f.camera || f.root !in found) found[f.root] = f }
+            // The same camera seen by camera-ai: the computer is enough
+            return found.values.toList()
+        }
+
+        private fun ask(wifi: Network?, mine: LinkAddress?, waitMs: Long): List<Found> {
             val found = LinkedHashMap<String, Found>()
             DatagramSocket().use { s ->
+                wifi?.let { n -> runCatching { n.bindSocket(s) } }
                 s.broadcast = true
                 s.soTimeout = 250
                 val ask = "camera-ai?".toByteArray()
-                s.send(DatagramPacket(ask, ask.size, InetAddress.getByName("255.255.255.255"), DISCOVERY_PORT))
+                val targets = listOfNotNull(InetAddress.getByName("255.255.255.255"), mine?.let { broadcastOf(it) })
+                repeat(2) { targets.forEach { t -> runCatching { s.send(DatagramPacket(ask, ask.size, t, DISCOVERY_PORT)) } } }
                 val buf = ByteArray(2048)
                 val end = System.currentTimeMillis() + waitMs
                 while (System.currentTimeMillis() < end) {
@@ -265,6 +294,57 @@ class Hub(val root: String, val key: String?) {
             }
             return found.values.toList()
         }
+
+        private fun broadcastOf(a: LinkAddress): InetAddress {
+            val ip = a.address.address
+            val bits = a.prefixLength.coerceIn(8, 30)
+            val n = ((ip[0].toInt() and 0xff) shl 24) or ((ip[1].toInt() and 0xff) shl 16) or ((ip[2].toInt() and 0xff) shl 8) or (ip[3].toInt() and 0xff)
+            val b = n or ((1 shl (32 - bits)) - 1)
+            return InetAddress.getByAddress(byteArrayOf((b ushr 24).toByte(), (b ushr 16).toByte(), (b ushr 8).toByte(), b.toByte()))
+        }
+
+        /** Knocks on 1..254 of the phone's /24 for camera-ai (8787, answers /api/state) and XM cameras (34567). ~3 s. */
+        private fun knock(wifi: Network?, mine: Inet4Address): List<Found> {
+            val prefix = mine.address.let { "${it[0].toInt() and 0xff}.${it[1].toInt() and 0xff}.${it[2].toInt() and 0xff}." }
+            val found = java.util.Collections.synchronizedList(mutableListOf<Found>())
+            val pool = Executors.newFixedThreadPool(64)
+            for (i in 1..254) for (port in intArrayOf(8787, 34567)) pool.execute {
+                val host = prefix + i
+                if (host == mine.hostAddress) return@execute
+                val open = runCatching {
+                    (wifi?.socketFactory?.createSocket() ?: Socket()).use { it.connect(InetSocketAddress(host, port), 400) }
+                }.isSuccess
+                if (!open) return@execute
+                if (port == 34567) found.add(Found(host, null, camera = true))
+                else if (runCatching {
+                        val c = URL("http://$host:8787/api/state").openConnection() as HttpURLConnection
+                        c.connectTimeout = 1500; c.readTimeout = 2500
+                        try { c.responseCode == 200 || (c.responseCode == 401 && c.errorStream?.bufferedReader()?.readText()?.contains("senha") == true) }
+                        finally { c.disconnect() }
+                    }.getOrDefault(false)) found.add(Found("http://$host:8787", null))
+            }
+            pool.shutdown()
+            pool.awaitTermination(8, TimeUnit.SECONDS)
+            return found.toList()
+        }
+
+        /** A camera answering at [addr] without the computer: logs in (XM cameras come with admin and no password). */
+        fun tryCamera(context: Context, addr: String, user: String = "admin", password: String = ""): CameraLink.Access {
+            val d = Dvrip.open(addr, user, password)
+            try {
+                val info = runCatching { d.request(1020, JSONObject().put("Name", "SystemInfo")).optJSONObject("SystemInfo") }.getOrNull()
+                val serial = info?.optString("SerialNo").orEmpty()
+                // Two lenses one over the other (the XM dual-lens): the main video is taller than 16:9
+                val enc = runCatching { d.request(1042, JSONObject().put("Name", "Simplify.Encode")).optJSONArray("Simplify.Encode")?.optJSONObject(0) }.getOrNull()
+                val res = enc?.optJSONObject("MainFormat")?.optJSONObject("Video")?.optString("Resolution").orEmpty()
+                val two = info?.optString("HardWare").orEmpty().contains("X6S") || res.matches(Regex("(?i).*(3072x2048|2560x2880|1920x2160).*"))
+                return CameraLink.Access(addr, user, password, serial, "Câmera", two).also { CameraLink.get(context).remember(it) }
+            } finally { d.close() }
+        }
+
+        /** The Hub of a phone that has only the camera (no computer): everything goes to the camera itself. */
+        const val CAMERA_ONLY = "http://0.0.0.0"
+
 
         /** Signs in with camera-ai's password; returns the key (this phone's own, under its name). */
         fun login(root: String, password: String, name: String): String {

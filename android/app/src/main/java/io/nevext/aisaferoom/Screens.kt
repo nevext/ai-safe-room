@@ -1,5 +1,6 @@
 package io.nevext.aisaferoom
 
+import androidx.compose.ui.platform.LocalContext
 import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.compose.foundation.Canvas
@@ -1126,12 +1127,27 @@ fun FeaturesScreen(live: Live, onBack: () -> Unit, onZones: () -> Unit) {
 // MARK: - Achar o computador e entrar
 
 @Composable
-fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onBack: (() -> Unit)? = null) {
+fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () -> Unit, onBack: (() -> Unit)? = null) {
+    val context = LocalContext.current
     var searching by remember { mutableStateOf(true) }
     var found by remember { mutableStateOf<List<Found>>(emptyList()) }
     var address by remember { mutableStateOf("") }
+    var typing by remember { mutableStateOf(false) }          // the address by hand: the last option
+    var locked by remember { mutableStateOf<String?>(null) }  // a camera with a password: asks only that
+    var cameraPassword by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val tryCamera = { addr: String, password: String ->
+        scope.launch {
+            error = null
+            withContext(Dispatchers.IO) { runCatching { Hub.tryCamera(context, addr, password = password) } }
+                .onSuccess { onCamera() }
+                .onFailure {
+                    if (it.message?.contains("recusou o login") == true) { if (locked == addr) error = "Senha errada"; locked = addr }
+                    else error = "A câmera em $addr não respondeu"
+                }
+        }
+    }
     val tryRoot = { root: String ->
         scope.launch {
             error = null
@@ -1142,45 +1158,70 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onBack: (() -> 
     }
     LaunchedEffect(searching) {
         if (!searching) return@LaunchedEffect
-        found = withContext(Dispatchers.IO) { runCatching { Hub.discover() }.getOrDefault(emptyList()) }
+        found = withContext(Dispatchers.IO) { runCatching { Hub.discover(context) }.getOrDefault(emptyList()) }
         searching = false
-        if (found.size == 1) tryRoot(found[0].root)
+        // The computer if there is one (it has the AI too); else the camera straight, like its own app
+        val pcs = found.filter { !it.camera }
+        val cams = found.filter { it.camera }
+        when {
+            pcs.size == 1 -> tryRoot(pcs[0].root)
+            pcs.isEmpty() && cams.size == 1 -> tryCamera(cams[0].root, "")
+        }
     }
     Page {
         onBack?.let { TopBar("", null, it) }
         Column(Modifier.fillMaxWidth().padding(top = if (onBack == null) 48.dp else 8.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Logo(82.dp)
             Brand(26.sp, Modifier.padding(top = 18.dp))
-            Text("Conecte ao computador de casa que cuida das câmeras. O celular precisa estar no mesmo Wi-Fi.",
+            Text("Procurando a sua câmera no Wi-Fi. O celular precisa estar no mesmo Wi-Fi que ela.",
                 color = palette.muted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }
         if (searching) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(18.dp), color = Blue, strokeWidth = 2.dp)
-                Text("Procurando na rede…", modifier = Modifier.padding(start = 12.dp))
+                Text("Procurando a câmera e o computador…", modifier = Modifier.padding(start = 12.dp))
             }
         } else {
             found.forEach { f ->
-                Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).card(palette).clickable { tryRoot(f.root) }.padding(16.dp),
+                Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).card(palette).clickable { if (f.camera) tryCamera(f.root, "") else tryRoot(f.root) }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    IconBubble(Icons.Outlined.Devices)
+                    IconBubble(if (f.camera) Icons.Outlined.Videocam else Icons.Outlined.Devices)
                     Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                        Text("Computador de casa", fontWeight = FontWeight.SemiBold)
+                        Text(if (f.camera) "Câmera" else "Computador de casa (com a IA)", fontWeight = FontWeight.SemiBold)
                         Text(f.root.removePrefix("http://"), color = palette.muted, fontSize = 12.sp)
                     }
                     Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = palette.muted)
                 }
             }
-            if (found.isEmpty()) Text("Não achei sozinho. Digite o endereço que aparece no computador.", color = palette.muted, fontSize = 13.sp)
+            if (found.isEmpty()) Text("Não achei nenhuma câmera. Confira se ela está ligada e se o celular está no mesmo Wi-Fi (não nos dados móveis).",
+                color = palette.muted, fontSize = 13.sp, textAlign = TextAlign.Center)
             TextButton(onClick = { searching = true }) { Text("Procurar de novo", color = Blue) }
         }
-        OutlinedTextField(address, { address = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            label = { Text("Endereço (ex.: 192.168.0.34:8787)") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
-        Button(onClick = {
-            val a = address.trim().removePrefix("http://").trimEnd('/')
-            if (a.isNotEmpty()) tryRoot("http://" + if (':' in a) a else "$a:8787")
-        }, colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) {
-            Text("Conectar")
+        locked?.let { addr ->
+            Text("A câmera em $addr tem senha. Digite a senha dela (a mesma do app da marca).", fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+            OutlinedTextField(cameraPassword, { cameraPassword = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                label = { Text("Senha da câmera") }, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
+            Button(onClick = { tryCamera(addr, cameraPassword) }, colors = ButtonDefaults.buttonColors(containerColor = Blue),
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) { Text("Entrar") }
+        }
+        if (!searching && !typing) TextButton(onClick = { typing = true }, modifier = Modifier.padding(top = 4.dp)) {
+            Text("Digitar o endereço", color = palette.muted, fontSize = 13.sp)
+        }
+        if (typing) {
+            OutlinedTextField(address, { address = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                label = { Text("Endereço (ex.: 192.168.0.34)") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
+            Button(onClick = {
+                val a = address.trim().removePrefix("http://").trimEnd('/')
+                // The computer (with :8787) or the camera itself
+                if (a.endsWith(":8787")) tryRoot("http://$a")
+                else if (a.isNotEmpty()) scope.launch {
+                    val pc = withContext(Dispatchers.IO) { runCatching { Hub("http://${a.substringBefore(':')}:8787", null).screen() } }
+                    if (pc.isSuccess || pc.exceptionOrNull() is Locked) tryRoot("http://${a.substringBefore(':')}:8787") else tryCamera(a.substringBefore(':'), "")
+                }
+            }, colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) {
+                Text("Conectar")
+            }
         }
         error?.let { Text(it, color = Red, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp)) }
     }

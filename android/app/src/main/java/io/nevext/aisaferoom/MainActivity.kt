@@ -284,7 +284,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 // Opened from "+" with a computer already connected: back returns to the app
                 if (h != null) BackHandler(onBack = back)
                 FindScreen(onFound = { root, inside -> if (inside) keep(Hub(root, null)) else screen = Screen.LetIn(root) },
-                    onBack = if (h != null) back else null)
+                    onCamera = { keep(Hub(Hub.CAMERA_ONLY, null)) }, onBack = if (h != null) back else null)
             }
             is Screen.LetIn -> LetInScreen(s.root, onKey = { keep(Hub(s.root, it)) }, onBack = { screen = Screen.Find })
             Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, live.unseen, onTab = { tab = it; screen = it }) {
