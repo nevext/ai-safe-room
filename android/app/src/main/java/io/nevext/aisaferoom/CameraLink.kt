@@ -20,7 +20,7 @@ class CameraLink private constructor(private val context: Context) {
     var access: Access? = load(); private set
     private var session: Dvrip? = null
 
-    private fun load(): Access? = prefs.getString("camera", null)?.let { runCatching {
+    private fun load(): Access? = prefs.getSecret("camera")?.let { runCatching {
         val j = JSONObject(it)
         Access(j.getString("addr"), j.optString("user", "admin"), j.optString("pass"), j.optString("serial"), j.optString("name", "Câmera"),
             j.optBoolean("twoLenses"))
@@ -30,7 +30,7 @@ class CameraLink private constructor(private val context: Context) {
     fun remember(a: Access) {
         if (a == access) return
         access = a
-        prefs.edit().putString("camera", JSONObject().put("addr", a.addr).put("user", a.user).put("pass", a.pass).put("serial", a.serial)
+        prefs.edit().putSecret("camera", JSONObject().put("addr", a.addr).put("user", a.user).put("pass", a.pass).put("serial", a.serial)
             .put("name", a.name).put("twoLenses", a.twoLenses).toString()).apply()
         synchronized(this) { session?.close(); session = null }
     }

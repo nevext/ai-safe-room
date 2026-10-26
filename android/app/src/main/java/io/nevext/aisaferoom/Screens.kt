@@ -914,7 +914,7 @@ fun SystemScreen(live: Live, prefs: android.content.SharedPreferences, onBack: (
         Text("Fora do Wi-Fi de casa, o app tenta este endereço do computador (por exemplo o do Tailscale, 100.x.x.x:8787).",
             color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(remote, { remote = it }, singleLine = true, modifier = Modifier.weight(1f), placeholder = { Text("100.117.117.73:8787") },
+            OutlinedTextField(remote, { remote = it }, singleLine = true, modifier = Modifier.weight(1f), placeholder = { Text("100.x.x.x:8787") },
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
             TextButton(onClick = {
                 val a = remote.trim().removePrefix("http://").trimEnd('/')

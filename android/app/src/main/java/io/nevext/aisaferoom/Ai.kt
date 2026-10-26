@@ -158,16 +158,16 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         // computer (busy with a game, off). The computer is asked in the background, in case the address changed.
         if (visible && url == null) url = withContext(Dispatchers.IO) {
             val prefs = context.getSharedPreferences("aisaferoom", android.content.Context.MODE_PRIVATE)
-            val kept = prefs.getString("directStream", null)?.let { runCatching { JSONObject(it) }.getOrNull() }
+            val kept = prefs.getSecret("directStream")?.let { runCatching { JSONObject(it) }.getOrNull() }
             val fresh = if (kept != null && attempt == 0) null
-                else runCatching { hub.directStream().also { prefs.edit().putString("directStream", it.toString()).apply() } }.getOrNull()
+                else runCatching { hub.directStream().also { prefs.edit().putSecret("directStream", it.toString()).apply() } }.getOrNull()
             val s = fresh ?: kept ?: return@withContext null
             val useLight = light ?: !decodesBig(s.optInt("width", 3072), s.optInt("height", 2048)).also { light = !it }
             s.optString(if (useLight) "sub" else "main").ifEmpty { null }
         }
         if (attempt == 0 && visible) launch(Dispatchers.IO) {
             runCatching { hub.directStream() }.onSuccess {
-                context.getSharedPreferences("aisaferoom", android.content.Context.MODE_PRIVATE).edit().putString("directStream", it.toString()).apply()
+                context.getSharedPreferences("aisaferoom", android.content.Context.MODE_PRIVATE).edit().putSecret("directStream", it.toString()).apply()
             }
         }
         if (url == null && visible) { delay(3000); attempt++ }

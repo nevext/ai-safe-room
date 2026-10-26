@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("aisaferoom", Context.MODE_PRIVATE)
+        prefs.sealOld("key", "camera", "directStream")   // secrets saved before they were encrypted
         CameraLink.get(this)   // the camera straight from the phone (without the computer)
         asked.value = intent?.getStringExtra("open")
         // The warnings keep going with the app closed, if they were on
@@ -139,7 +140,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 setTheme: (String) -> Unit) {
     val live = remember {
         Live().apply {
-            hub = prefs.getString("root", null)?.let { Hub(it, prefs.getString("key", null)) }
+            hub = prefs.getString("root", null)?.let { Hub(it, prefs.getSecret("key")) }
             seenAt = prefs.getLong("seenAt", 0)
         }
     }
@@ -150,7 +151,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
     val activity = LocalContext.current as Activity
 
     val keep = { h: Hub ->
-        prefs.edit().putString("root", h.root).putString("key", h.key).apply()
+        prefs.edit().putString("root", h.root).putSecret("key", h.key).apply()
         live.hub = h
         screen = Screen.Splash
     }

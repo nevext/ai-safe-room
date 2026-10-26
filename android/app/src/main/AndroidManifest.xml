@@ -15,6 +15,9 @@
         android:label="AI Safe Room"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/no_backup"
         android:theme="@style/Theme.AiSafeRoom">
         <activity
             android:name=".MainActivity"

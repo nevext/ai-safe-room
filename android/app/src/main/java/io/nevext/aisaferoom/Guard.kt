@@ -55,7 +55,7 @@ class Guard : Service() {
     /** The computer, trying the home address and then the one from outside. */
     private fun reachable(): Hub? {
         val root = prefs.getString("root", null) ?: return null
-        val key = prefs.getString("key", null)
+        val key = prefs.getSecret("key")
         val remote = prefs.getString("remote", null)
         for (r in listOfNotNull(root, remote)) {
             val h = Hub(r, key)
