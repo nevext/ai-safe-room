@@ -2271,7 +2271,13 @@ const server = http.createServer(async (req, res) => {
     if (prefixed) u.pathname = prefixed[2];
     if (u.pathname === '/api/login' && req.method === 'POST') { const b = await readBody(req); return login(req, res, b.password, b.name); }
     if (u.pathname === '/api/access/request' && req.method === 'POST') return json(res, 200, accessRequest(req, (await readBody(req)).name));
-    if (u.pathname === '/api/screen/direct' && req.method === 'POST') return json(res, 200, setDirectWatch(!!(await readBody(req)).watching));
+    // Sem chave, só fora da Proteção: senão alguém na rede pausaria a IA de 20 em 20 s e a Proteção ficaria cega
+    // (teste de segurança, 26/10). A TV pareada manda a chave.
+    if (u.pathname === '/api/screen/direct' && req.method === 'POST') {
+      const keyed = fromThisPc(req) || knownKey(prefixed?.[1]) || knownKey(cookieKey(req)) || knownKey(req.headers['x-key']);
+      if (protection.on && !keyed) return json(res, 401, { error: 'com a Proteção ligada, precisa da chave' });
+      return json(res, 200, setDirectWatch(!!(await readBody(req)).watching));
+    }
     if (u.pathname === '/api/access/status') {
       const r = accessStatus(u.searchParams.get('id'));
       if (r.key) res.setHeader('set-cookie', `camkey=${r.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
