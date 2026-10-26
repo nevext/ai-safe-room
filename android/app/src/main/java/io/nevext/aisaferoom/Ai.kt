@@ -81,7 +81,7 @@ import java.util.Locale
  */
 @OptIn(UnstableApi::class)
 @Composable
-fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier = Modifier, fit: Boolean = false) {
+fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier = Modifier, fit: Boolean = false, onGiveUp: () -> Unit = {}) {
     val hub = live.hub ?: return
     val context = LocalContext.current
     var url by remember(hub) { mutableStateOf<String?>(null) }
@@ -109,7 +109,11 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     }
     DisposableEffect(player) { onDispose { player?.release(); playing = false } }
     // The camera dropped: try again in a few seconds
-    LaunchedEffect(failed) { if (failed) { delay(3000); failed = false; attempt++ } }
+    LaunchedEffect(failed) {
+        if (!failed) return@LaunchedEffect
+        if (attempt >= 3 && !playing) { onGiveUp(); return@LaunchedEffect }   // the camera won't open direct (another network)
+        delay(3000); failed = false; attempt++
+    }
 
     BoxWithConstraints(modifier.clipToBounds().background(Color(0xFF0B0F17)), contentAlignment = Alignment.Center) {
         // The part of the picture to show (one lens is half of it), fitted in the box or filling it

@@ -79,6 +79,8 @@ class Live {
     val privacyOn: Boolean get() = info?.optJSONObject("privacy")?.optBoolean("on") == true
     /** The AI is the person's choice (off by default): off, the video comes straight from the camera. */
     val aiOn: Boolean get() = info?.optJSONObject("ai")?.optBoolean("enabled") == true
+    /** Away from home (using the address set in Conexão): the camera isn't reachable direct, the video comes via the computer. */
+    var away by mutableStateOf(false)
     var seenAt by mutableStateOf(0L)   // activities after this are new (the number on the Atividades tab)
     val unseen: Int get() = (0 until activity.length()).mapNotNull { activity.optJSONObject(it) }
         .count { it.optString("type") in setOf("person", "animal") && it.optLong("at") > seenAt }
@@ -173,6 +175,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 val other = if (h.root == home) prefs.getString("remote", null) else home
                 if (other != null && withContext(Dispatchers.IO) { runCatching { h.at(other).screen() }.isSuccess }) {
                     live.hub = h.at(other)
+                    live.away = other != home
                     return@LaunchedEffect
                 }
                 live.connected = false

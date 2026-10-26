@@ -371,7 +371,7 @@ fun ConnectionCard(hub: Hub) {
             camera?.optString("detail") ?: "Medindo…", camera?.optString("tip")?.takeIf { it.isNotEmpty() && it != "null" },
             busy == "camera") { again("camera") }
         val aiOn = ai?.optString("state") == "on"
-        ConnectionRow(Icons.Outlined.AutoAwesome, "IA (camera-ai)", if (aiOn) ai?.optString("label") else "Desligada",
+        ConnectionRow(Icons.Outlined.AutoAwesome, "IA", if (aiOn) ai?.optString("label") else "Desligada",
             if (aiOn) ai?.grade() else null, ai?.optString("detail") ?: "Medindo…", null, busy == "ai",
             onReconnect = if (aiOn) ({ again("ai") }) else null)
     }
@@ -389,7 +389,7 @@ private fun ConnectionRow(icon: androidx.compose.ui.graphics.vector.ImageVector,
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 label?.let {
-                    Text(it, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+                    Text(it, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, softWrap = false,
                         modifier = Modifier.padding(start = 8.dp).clip(RoundedCornerShape(50))
                             .background(grade?.let(::gradeColor) ?: palette.muted).padding(horizontal = 8.dp, vertical = 2.dp))
                 }

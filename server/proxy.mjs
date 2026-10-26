@@ -603,7 +603,7 @@ function connectionInfo() {
   if (!ai.model) aiInfo = { state: 'unavailable', detail: 'A IA não está instalada no computador' };
   else if (!ai.stop) aiInfo = { state: 'off', detail: directWatch.on ? 'Pausada: uma TV está vendo direto da câmera' : privacy.on ? 'Pausada: Privacidade ligada' : 'Desligada: nenhuma função de IA ligada' };
   else if (Date.now() - Math.max(live?.startedAt || 0, ai.lastStart || 0) < 12000)
-    aiInfo = { state: 'on', grade: null, label: 'Reconectando…', detail: 'O vídeo está voltando: leva alguns segundos' };
+    aiInfo = { state: 'on', grade: null, label: 'Voltando…', detail: 'O vídeo está voltando: leva alguns segundos' };
   else {
     const fps = live?.stats().whole?.fps || 0, age = Date.now() - ai.lastAt;
     const g = age > 10000 || fps < 2 ? 0 : ai.rate < 2 || fps < 8 ? 1 : ai.rate < 4 || fps < 12 ? 2 : 3;
