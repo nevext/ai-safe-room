@@ -76,6 +76,47 @@ import java.util.Locale
 // MARK: - A câmera normal, direto (sem IA)
 
 /**
+ * The one camera player of the app, shared by the screens: switching screens keeps the picture playing. Released a
+ * few seconds after no screen shows it (back to the home screen of the phone, a screen without video).
+ */
+@OptIn(UnstableApi::class)
+object SharedVideo {
+    private var player: ExoPlayer? = null
+    private var url: String? = null
+    private var users = 0
+    var aspect = 1.5f; private set
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val releaseLater = Runnable { if (users == 0) reset() }
+
+    fun acquire(context: android.content.Context, u: String): ExoPlayer {
+        handler.removeCallbacks(releaseLater)
+        users++
+        player?.takeIf { url == u }?.let { android.util.Log.i("SharedVideo", "reuse users=$users"); return it }
+        android.util.Log.i("SharedVideo", "new (had ${url?.takeLast(30)}) -> ${u.takeLast(30)} users=$users")
+        reset()
+        url = u
+        // Little reserve to start (live, not 8 s behind); waits 15 s for the camera before giving up (a Wi-Fi burst
+        // isn't a reason to reconnect)
+        return ExoPlayer.Builder(context.applicationContext).setLoadControl(
+            androidx.media3.exoplayer.DefaultLoadControl.Builder().setBufferDurationsMs(300, 3000, 100, 300).build()
+        ).build().apply {
+            setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setTimeoutMs(15_000).createMediaSource(MediaItem.fromUri(u)))
+            volume = 0f
+            playWhenReady = true
+            addListener(object : Player.Listener {
+                override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
+            })
+            prepare()
+        }.also { player = it }
+    }
+    fun leave() {
+        users = (users - 1).coerceAtLeast(0)
+        if (users == 0) { handler.removeCallbacks(releaseLater); handler.postDelayed(releaseLater, 4000) }
+    }
+    fun reset() { if (player != null) android.util.Log.i("SharedVideo", "reset users=$users"); player?.release(); player = null; url = null }
+}
+
+/**
  * Whether this phone decodes the camera's big video in hardware. Without it (emulators, weak phones) the software
  * decoder falls behind, the camera waits on it and chokes (the picture freezes and its snapshot fails, 26/10).
  */
@@ -123,29 +164,31 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         }
         if (url == null && visible) { delay(3000); attempt++ }
     }
-    val player = remember(url, visible, attempt) {
-        val u = url
-        // Little reserve to start (live, not 8 s behind); waits 15 s for the camera before giving up (a Wi-Fi burst
-        // isn't a reason to reconnect)
-        if (u == null || !visible) null else ExoPlayer.Builder(context).setLoadControl(
-            androidx.media3.exoplayer.DefaultLoadControl.Builder().setBufferDurationsMs(300, 3000, 100, 300).build()
-        ).build().apply {
-            setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setTimeoutMs(15_000).createMediaSource(MediaItem.fromUri(u)))
-            volume = 0f
-            playWhenReady = true
-            addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    if (state == Player.STATE_READY) { playing = true; failed = false }
-                    // Stopping to wait for video again and again: the big one is too much here, go light
-                    if (state == Player.STATE_BUFFERING && playing && light == false && ++stalls >= 3) { light = true; url = null; attempt++ }
-                }
-                override fun onPlayerError(error: PlaybackException) { playing = false; failed = true; url = null }   // the password may have changed
-                override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
-            })
-            prepare()
+    // One player for the whole app: going from Início to the camera (or full screen) keeps the same picture and the
+    // same connection, instead of closing one and opening another (the camera only takes one)
+    val player = remember(url, visible, attempt) { url?.takeIf { visible }?.let { SharedVideo.acquire(context, it) } }
+    var texture by remember { mutableStateOf<TextureView?>(null) }
+    DisposableEffect(player) {
+        val p = player ?: return@DisposableEffect onDispose {}
+        playing = p.playbackState == Player.STATE_READY
+        aspect = SharedVideo.aspect
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) { playing = true; failed = false }
+                // Stopping to wait for video again and again: the big one is too much here, go light
+                if (state == Player.STATE_BUFFERING && playing && light == false && ++stalls >= 3) { light = true; url = null; attempt++ }
+            }
+            override fun onPlayerError(error: PlaybackException) { playing = false; failed = true; url = null }   // the password may have changed
+            override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
+        }
+        p.addListener(listener)
+        onDispose {
+            p.removeListener(listener)
+            texture?.let { p.clearVideoTextureView(it) }
+            SharedVideo.leave()
+            playing = false
         }
     }
-    DisposableEffect(player) { onDispose { player?.release(); playing = false } }
     // The room's sound comes in the camera's own stream: just turn it up
     LaunchedEffect(player, live.listen) { player?.volume = if (live.listen) 1f else 0f }
     // Stay live, like the TV: the reserve starts small and grows only when the camera's Wi-Fi stutters (each freeze adds
@@ -167,6 +210,7 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     // The camera dropped: try again in a few seconds
     LaunchedEffect(failed) {
         if (!failed) return@LaunchedEffect
+        SharedVideo.reset()
         if (attempt >= 3 && !playing) { onGiveUp(); return@LaunchedEffect }   // the camera won't open direct (another network)
         delay(3000); failed = false; attempt++
     }
@@ -178,7 +222,7 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         val (rw, rh) = if (wide == fit) maxWidth to maxWidth / region else maxHeight * region to maxHeight
         val fullH = rw / aspect
         val dy = when (view) { "top" -> (fullH - rh) / 2; "bottom" -> -(fullH - rh) / 2; else -> 0.dp }
-        if (player != null) AndroidView(factory = { TextureView(it) }, update = { player.setVideoTextureView(it) },
+        if (player != null) AndroidView(factory = { TextureView(it).also { t -> texture = t } }, update = { player.setVideoTextureView(it) },
             modifier = Modifier.requiredSize(rw, fullH).offset(y = dy))
         if (!playing) {
             rememberPicture(hub, hub.thumbUrl)?.let {
@@ -304,6 +348,7 @@ fun DiagnosticsScreen(live: Live, onBack: () -> Unit) {
         TopBar("", null, onBack)
         PageTitle("Diagnóstico", "Descubra o que está atrapalhando")
         WifiTuneCard(hub)
+        LightVideoCard(hub)
         TESTS.forEach { (id, title, text) ->
             val r = results.value[id]
             Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette).padding(16.dp)) {
@@ -443,6 +488,41 @@ private fun WifiTuneCard(hub: Hub) {
                     }
                 }) { Text(if (undo) "Desfazer" else "Ajustar", color = Blue) }
             }
+        }
+    }
+}
+
+/** The light video: TVs and basic phones pick it by themselves when the big one is more than their decoder takes. */
+@Composable
+private fun LightVideoCard(hub: Hub) {
+    val scope = rememberCoroutineScope()
+    var info by remember { mutableStateOf<JSONObject?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { info = withContext(Dispatchers.IO) { runCatching { hub.lightVideo() }.getOrNull() } }
+    val i = info ?: return
+    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBubble(Icons.Outlined.Videocam, size = 38)
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text("Vídeo leve (TVs e celulares simples)", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text("${i.optString("resolution")} · ${i.optInt("fps")} quadros/s · ${i.optInt("kbps")} kbps", color = palette.muted, fontSize = 12.sp)
+            }
+        }
+        Text("Quem não aguenta o vídeo grande (muitas TVs param em 1920×1080) usa este, escolhido sozinho pelo aparelho.",
+            color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+        Text(i.optString("advice"), color = if (i.optBoolean("good")) Green else Orange, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+        note?.let { Text(it, color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
+        if (!i.isNull("better")) Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.End) {
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Blue)
+            else OutlinedButton(onClick = {
+                busy = true
+                scope.launch {
+                    withContext(Dispatchers.IO) { runCatching { hub.improveLightVideo() } }
+                        .onSuccess { info = it; note = "Pronto." }.onFailure { note = "Não deu: ${it.message}" }
+                    busy = false
+                }
+            }) { Text("Usar ${i.optString("better")}", color = Blue) }
         }
     }
 }

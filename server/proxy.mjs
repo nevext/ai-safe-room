@@ -725,6 +725,43 @@ async function wifiTuneStatus() {
   return { ok: true, tuned: v?.BitRateControl === 'CBR' && v?.GOP === 1 && v?.VirtualGOP === 1, canUndo: !!perfil?.data.encodeBefore, ...wifiTuneInfo(cur) };
 }
 
+// O vídeo leve (o que TVs e celulares simples usam: muitos decodificadores param em 1920×1088, e o app e a TV escolhem
+// sozinhos o maior que o aparelho aguenta). Regra para qualquer câmera XM: das resoluções que ela oferece para o leve
+// (EncodeCapability, máscara de bits), a maior até 1080p; e bits suficientes para a imagem não ficar borrada.
+const XM_RES = ['D1', 'HD1', 'BCIF', 'CIF', 'QCIF', 'VGA', 'QVGA', 'SVCD', 'QQVGA', 'ND1', '960H', '720P', '960', 'UXGA', '1080P', 'WUXGA',
+  '2_5M', '3M', '5M', '1080N', '4M', '6M', '8M', '12M', '4K'];
+const RES_ORDER = ['QQVGA', 'QCIF', 'QVGA', 'CIF', 'HD1', 'BCIF', 'VGA', 'D1', 'SVCD', 'ND1', '960H', '720P', '960', '1080N', 'UXGA', '1080P'];   // até 1080p
+async function lightVideo() {
+  const session = await dvrSession();
+  const capab = (await session.request(1360, { Name: 'EncodeCapability' })).EncodeCapability;
+  const enc = (await session.request(1042, { Name: 'Simplify.Encode' }))['Simplify.Encode']?.[0];
+  const mask = parseInt(capab?.EncodeInfo?.find(e => e.StreamType === 'ExtraStream2')?.ResolutionMask || '0', 16);
+  const options = XM_RES.filter((_, i) => mask & (1 << i));
+  const v = enc?.ExtraFormat?.Video;
+  const sub = subProfile();
+  const best = [...options].filter(r => RES_ORDER.includes(r)).sort((a, b) => RES_ORDER.indexOf(b) - RES_ORDER.indexOf(a))[0] || null;
+  // Bits por pixel por quadro: abaixo de ~0,06 a imagem começa a borrar quando algo se mexe
+  const bpp = sub?.width && v?.FPS ? (v.BitRate * 1000) / (sub.width * sub.height * v.FPS) : null;
+  const better = best && v && best !== v.Resolution && RES_ORDER.indexOf(best) > RES_ORDER.indexOf(v.Resolution) ? best : null;
+  const advice = better ? `A câmera oferece um vídeo leve maior (${better}): fica mais nítido nas TVs e celulares simples.`
+    : bpp != null && bpp < 0.05 ? 'Poucos dados para o tamanho do vídeo leve: a imagem pode borrar quando algo se mexe.'
+    : 'O vídeo leve já está no melhor que esta câmera oferece.';
+  return { ok: true, resolution: v?.Resolution, width: sub?.width, height: sub?.height, fps: v?.FPS, kbps: v?.BitRate, options, better,
+    bpp: bpp == null ? null : Math.round(bpp * 1000) / 1000, good: !better && !(bpp != null && bpp < 0.05), advice };
+}
+async function improveLightVideo() {
+  const info = await lightVideo();
+  if (!info.better) return { ...info, ok: false, error: 'não há o que melhorar' };
+  const session = await dvrSession();
+  const cur = (await session.request(1042, { Name: 'Simplify.Encode' }))['Simplify.Encode'];
+  const next = cur.map(ch => ({ ...ch, ExtraFormat: { ...ch.ExtraFormat, Video: { ...ch.ExtraFormat.Video, Resolution: info.better } } }));
+  const r = await session.request(1040, { Name: 'Simplify.Encode', 'Simplify.Encode': next });
+  if (r.Ret !== 100 && r.Ret !== 603) throw new Error(`a câmera recusou (${r.Ret})`);
+  perfil?.event('video', `Vídeo leve da câmera: ${info.resolution} → ${info.better}`);
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Vídeo leve da câmera: ${info.resolution} → ${info.better}`);
+  return { ...(await lightVideo()), ok: true };
+}
+
 // Relógio e reiniciar
 async function syncClock() {
   const d = new Date(), z = (n) => String(n).padStart(2, '0');
@@ -1728,6 +1765,7 @@ const CAP_LABELS = {
   audio: L('Microfone', 'Microphone'),
   talk: L('Falar pela câmera', 'Talk through the camera'),
   siren: L('Alarme de voz da câmera', 'Camera voice alarm'),
+  lightVideo: L('Vídeo leve (TVs e celulares simples)', 'Light video (TVs, basic phones)'),
 };
 async function openProfile() {
   const before = perfil?.data.serial;
@@ -1844,6 +1882,10 @@ async function runFullVistoria() {
     }
     // Movimento: conferido quando a câmera avisar de verdade (fica marcado sozinho)
     if (perfil.has('motion') && perfil.status('motion') !== 'ok') results.push({ id: 'motion', status: perfil.status('motion'), how: 'confere sozinho no primeiro aviso de movimento' });
+    try {
+      const lv = await lightVideo();
+      results.push({ id: 'lightVideo', status: lv.good ? 'ok' : 'declared', how: `vídeo leve ${lv.resolution} ${lv.width}×${lv.height}, ${lv.fps} q/s, ${lv.kbps} kbps: ${lv.advice}` });
+    } catch {}
     const ok = results.filter(r => r.status === 'ok').length;
     perfil.event('vistoria', `Vistoria completa: ${ok} de ${results.length} conferidos`, { results, level: quality.level.level });
     fullVistoria.last = { at: Date.now(), results };
@@ -2276,6 +2318,7 @@ const server = http.createServer(async (req, res) => {
         name: perfil?.data.name || 'Câmera', twoLenses: PROFILE.lenses?.count === 2 }) : json(res, 503, { error: 'a câmera não está conectada' });
       case '/api/camera/own': return json(res, 200, req.method === 'POST' ? await setCameraOwn(await readBody(req)) : { ok: true, ...(await cameraOwn()) });
       case '/api/camera/wifi-tune': return json(res, 200, req.method === 'POST' ? await wifiTune(!!(await readBody(req)).undo) : await wifiTuneStatus());
+      case '/api/camera/light-video': return json(res, 200, req.method === 'POST' ? await improveLightVideo() : await lightVideo());
       case '/api/camera/clock': return json(res, 200, await syncClock());
       case '/api/camera/reboot': return json(res, 200, await rebootCamera());
       case '/api/talk': return talk(req, res);

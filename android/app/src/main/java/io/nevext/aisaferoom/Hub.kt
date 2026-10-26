@@ -78,6 +78,9 @@ class Hub(val root: String, val key: String?) {
     fun syncClock(): JSONObject = cam?.let { JSONObject().put("ok", true).put("time", it.syncClock()) } ?: json("$base/api/camera/clock", "{}")
     /** The camera's video made easier on Wi-Fi (constant bitrate, a whole frame every second), or back as it was. */
     fun wifiTune(): JSONObject = json("$base/api/camera/wifi-tune")
+    /** The light video (what TVs and basic phones use): how it is, and the better one the camera offers, if any. */
+    fun lightVideo(): JSONObject = json("$base/api/camera/light-video")
+    fun improveLightVideo(): JSONObject = json("$base/api/camera/light-video", "{}", timeoutMs = 30_000)
     fun setWifiTune(undo: Boolean): JSONObject = json("$base/api/camera/wifi-tune", JSONObject().put("undo", undo).toString(), timeoutMs = 30_000)
     fun reboot(): JSONObject = cam?.let { it.reboot(); JSONObject().put("ok", true) } ?: json("$base/api/camera/reboot", "{}")
     /** The camera's password: through the computer when it's there (it reconnects with the new one), else straight. */
