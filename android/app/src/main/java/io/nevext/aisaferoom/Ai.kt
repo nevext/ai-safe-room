@@ -89,6 +89,8 @@ object SharedVideo {
     var aspect = 1.5f; private set
     /** What's playing now: a screen that opens picks it up at once, without asking anything. */
     val current: String? get() = url
+    /** Already showing the picture: a screen that opens draws it from its first frame, no "Abrindo a câmera" flash. */
+    val showing: Boolean get() = player?.playbackState == Player.STATE_READY
     /** The last picture the previous screen showed: the next one shows it until its first frame (no black flash). */
     var lastFrame: androidx.compose.ui.graphics.ImageBitmap? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -144,7 +146,7 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     val hub = live.hub ?: return
     val context = LocalContext.current
     var url by remember(hub) { mutableStateOf(SharedVideo.current) }
-    var playing by remember { mutableStateOf(false) }
+    var playing by remember { mutableStateOf(SharedVideo.showing) }
     var drawn by remember { mutableStateOf(false) }   // this screen's own picture already showed its first frame
     var failed by remember { mutableStateOf(false) }
     var attempt by remember { mutableIntStateOf(0) }
@@ -191,9 +193,17 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         p.addListener(listener)
         onDispose {
             p.removeListener(listener)
-            texture?.let { t -> runCatching { t.bitmap?.asImageBitmap() }.getOrNull()?.let { SharedVideo.lastFrame = it }; p.clearVideoTextureView(t) }
+            // Not cleared here: the screen goes away anyway, and clearing first showed it black for a frame
+            texture?.let { t -> runCatching { t.bitmap?.asImageBitmap() }.getOrNull()?.let { SharedVideo.lastFrame = it } }
             SharedVideo.leave()
             playing = false
+        }
+    }
+    // The last picture is kept every few seconds (the camera list and the next screen show it at once)
+    LaunchedEffect(player, texture) {
+        while (player != null && texture != null) {
+            delay(3000)
+            if (playing && drawn) runCatching { texture?.bitmap?.asImageBitmap() }.getOrNull()?.let { SharedVideo.lastFrame = it }
         }
     }
     // The room's sound comes in the camera's own stream: just turn it up
@@ -236,7 +246,7 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
             Image(it, null, contentScale = ContentScale.FillBounds, modifier = Modifier.requiredSize(rw, fullH).offset(y = dy))
         }
         if (!playing) {
-            rememberCameraPicture(hub)?.let {
+            (SharedVideo.lastFrame ?: rememberCameraPicture(hub))?.let {
                 Image(it, null, contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.6f)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
