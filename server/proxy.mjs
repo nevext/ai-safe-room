@@ -426,7 +426,7 @@ function toggleRecord(on) {
 
 const SCREEN_VERSION = 1;
 const MODEL_DIR = path.join(HERE, 'models');
-const ai = { status: 'loading', model: null, stop: null, last: null, listeners: new Set(), idle: null };
+const ai = { status: 'loading', model: null, stop: null, last: null, listeners: new Set(), idle: null, count: 0, rate: 0, lastAt: 0 };
 
 // A conexão única com a câmera (server/live.mjs): telas e IA saem todas dela.
 const meter = createMeter();
@@ -523,7 +523,7 @@ function startAi() {
   if (ai.stop || !ai.model || !live || directWatch.on || privacy.on) return;
   const analyze = analyzer({ model: ai.model, onResult: r => {
     r = ignoreZones(r);
-    ai.last = r; updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
+    ai.last = r; ai.count++; ai.lastAt = Date.now(); updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
     arrivals(r);
   } });
   // O quadro que a IA olha fica guardado: a miniatura de uma pessoa sai dele, do mesmo instante (o snapshot da
@@ -553,6 +553,72 @@ function checkDirectWatch() {
   }
 }
 setInterval(checkDirectWatch, 3000);
+
+// ---------- Conexão: como estão a câmera e a IA (Péssimo, Regular, Bom, Ótimo) ----------
+// A câmera: a cada 10 s, o ping dela (a rede, sem abrir vídeo: não pesa nela) e as quedas da última hora. A porta do
+// vídeo não serve de medida: com a câmera ocupada ela demorava 137 ms para atender com o ping em 3 ms (25/10).
+// A IA: quantas análises por segundo e quantos quadros chegam do vídeo dela.
+const GRADES = ['Péssimo', 'Regular', 'Bom', 'Ótimo'];
+const probe = { samples: [] };   // { at, ms } (ms null = não respondeu)
+function probeCamera() {
+  if (!cam.addr) return Promise.resolve();
+  const args = process.platform === 'win32' ? ['-n', '1', '-w', '2000', cam.addr] : ['-c', '1', '-W', '2', cam.addr];
+  return new Promise(ok => {
+    let out = '';
+    const p = spawn('ping', args);
+    p.stdout.on('data', d => out += d);
+    p.on('error', () => ok());
+    p.on('close', () => {
+      const m = out.match(/(?:time|tempo)[=<]\s*([\d.,]+)\s*ms/i);
+      probe.samples = [...probe.samples, { at: Date.now(), ms: m ? Math.max(1, Math.round(parseFloat(m[1].replace(',', '.')))) : null }].slice(-6);
+      ok();
+    });
+  });
+}
+setInterval(probeCamera, 10000).unref();
+setInterval(() => { ai.rate = ai.count / 10; ai.count = 0; }, 10000).unref();
+
+function connectionInfo() {
+  const answered = probe.samples.filter(x => x.ms != null), fails = probe.samples.length - answered.length;
+  const avg = answered.length ? Math.round(answered.reduce((n, x) => n + x.ms, 0) / answered.length) : null;
+  const drops = meter.drops();
+  const camGrade = !cam.addr || !answered.length || fails >= 2 || drops >= 6 ? 0
+    : fails || avg > 60 || drops >= 2 ? 1 : avg > 15 || drops >= 1 ? 2 : 3;
+  const camera = {
+    grade: camGrade, label: GRADES[camGrade], ms: avg, drops,
+    detail: !answered.length ? 'A câmera não responde' : `Responde em ${avg} ms · ${drops ? `${drops} ${drops === 1 ? 'queda' : 'quedas'} na última hora` : 'sem quedas na última hora'}`,
+    tip: camGrade <= 1 ? 'O Wi-Fi da câmera está fraco: aproxime o roteador ou ponha um repetidor perto dela.' : null,
+  };
+  let aiInfo;
+  if (!ai.model) aiInfo = { state: 'unavailable', detail: 'A IA não está instalada no computador' };
+  else if (!ai.stop) aiInfo = { state: 'off', detail: directWatch.on ? 'Pausada: uma TV está vendo direto da câmera' : privacy.on ? 'Pausada: Privacidade ligada' : 'Desligada: nenhuma função de IA ligada' };
+  else if (Date.now() - Math.max(live?.startedAt || 0, ai.lastStart || 0) < 12000)
+    aiInfo = { state: 'on', grade: null, label: 'Reconectando…', detail: 'O vídeo está voltando: leva alguns segundos' };
+  else {
+    const fps = live?.stats().whole?.fps || 0, age = Date.now() - ai.lastAt;
+    const g = age > 10000 || fps < 2 ? 0 : ai.rate < 2 || fps < 8 ? 1 : ai.rate < 4 || fps < 12 ? 2 : 3;
+    aiInfo = { state: 'on', grade: g, label: GRADES[g], rate: ai.rate, fps,
+      detail: age > 10000 ? 'Parada: o vídeo não está chegando' : `${ai.rate.toFixed(1).replace('.', ',')} análises/s · vídeo a ${fps} quadros/s` };
+  }
+  return { ok: true, camera, ai: aiInfo };
+}
+// "Reconectar": a câmera (o vídeo e o controle começam de novo) ou a IA (a análise recomeça)
+async function reconnect(what) {
+  const at = new Date().toLocaleTimeString('pt-BR');
+  if (what === 'camera') {
+    console.log(`${at} Reconectar a câmera (pedido)`);
+    try { cam.dvr?.close(); } catch {}
+    live?.restart();
+    probe.samples = [];
+    await probeCamera();
+  } else if (what === 'ai') {
+    if (!ai.stop) return { ok: false, error: 'a IA está desligada', ...connectionInfo() };
+    console.log(`${at} Reconectar a IA (pedido)`);
+    ai.stop(); ai.stop = null; ai.lastAt = ai.lastStart = Date.now();
+    startAi();
+  } else return { ok: false, error: 'reconectar o quê?' };
+  return connectionInfo();
+}
 
 function stopAiSoon() {
   clearTimeout(ai.idle);
@@ -1922,6 +1988,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, perfilInfo());
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
+      case '/api/connection': return json(res, 200, req.method === 'POST' ? await reconnect((await readBody(req)).reconnect) : connectionInfo());
       case '/api/activity/forget': { const b = await readBody(req); return json(res, 200, forgetActivity(b.at, b.type)); }
       case '/api/activity/who': return json(res, 200, await whoIs(await readBody(req)));
       case '/api/faces': return json(res, 200, facesInfo());

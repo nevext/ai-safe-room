@@ -49,6 +49,7 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
   const audioSubs = new Set();
   const tsTaps = Object.fromEntries(views.map(v => [v, new Set()]));   // quem guarda o vídeo (clipes): não liga o ffmpeg sozinho
   const stats = Object.fromEntries(views.map(v => [v, { fps: 0, kbps: 0, frames: 0, bytes: 0, lastData: 0, maxGapMs: 0 }]));
+  let lastStart = 0;   // quando a conexão com a câmera começou (de novo)
   let ff = null, servers = [], starting = false, idle = null, restart = null, quitting = false;   // quitting: fomos nós que paramos
 
   const anyone = () => aiListeners.size > 0 || audioSubs.size > 0 || views.some(v => subs[v].size > 0);
@@ -157,7 +158,7 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
       args.push('-map', '[oh]', '-f', 'rawvideo', '-pix_fmt', 'rgb24', `tcp://127.0.0.1:${servers[views.length + 3].address().port}`);
       let errors = '';
       ff = spawn(ffmpeg, args);
-      const startedAt = Date.now();
+      const startedAt = lastStart = Date.now();
       // Vigia: com gente assistindo e nada chegando há 15 s, a conexão travou (Wi-Fi da câmera caiu e voltou): de novo
       const proc = ff, watch = setInterval(() => {
         if (ff !== proc) return clearInterval(watch);
@@ -204,10 +205,13 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
     stats: () => stats,
     /** Conectado na câmera agora (alguém assistindo ou a IA ligada). */
     get active() { return !!ff; },
+    get startedAt() { return lastStart; },
     /** Telas assistindo por aqui (vídeo ou som); a IA não conta. */
     get viewers() { return viewers(); },
     /** Solta a câmera já, se só a IA usava (ela já parou). */
     stopNow() { stopIfIdle(0); },
+    /** Começa a conexão com a câmera de novo ("Reconectar"): quem está assistindo volta em ~2 s. */
+    restart() { lastStart = Date.now(); if (!ff) { if (anyone()) start(); return; } quitting = true; try { ff.kill('SIGKILL'); } catch {} },   // quitting: não conta como queda
     /** Manda a vista para esta resposta HTTP (H.264, a partir do próximo quadro inteiro). */
     watch(view, res) {
       const sub = { res, waiting: true };
@@ -242,6 +246,5 @@ export function createLive({ ffmpeg, inputArgs, rtsp, encoder, views, size = [19
       start();
       return () => { aiListeners.delete(fn); stopIfIdle(); };
     },
-    restart() { if (ff) { quitting = true; try { ff.kill('SIGKILL'); } catch {} } },
   };
 }

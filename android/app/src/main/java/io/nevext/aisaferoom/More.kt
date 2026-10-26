@@ -21,9 +21,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.NotificationsActive
@@ -32,8 +35,11 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Summarize
+import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -302,5 +308,102 @@ fun ZonesScreen(live: Live, onBack: () -> Unit) {
         }
         note?.let { Text(it, color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+// MARK: - Conexão (Péssimo, Regular, Bom, Ótimo)
+
+private fun gradeColor(grade: Int) = when (grade) { 0 -> Red; 1 -> Orange; 2 -> Blue; else -> Green }
+/** The grade, or null while it's reconnecting (no grade yet). */
+private fun JSONObject.grade(): Int? = if (isNull("grade")) null else optInt("grade")
+
+/** The connection, asked again every few seconds while [active]. */
+@Composable
+private fun rememberConnection(hub: Hub, active: Boolean = true): Pair<JSONObject?, (JSONObject) -> Unit> {
+    var info by remember { mutableStateOf<JSONObject?>(null) }
+    LaunchedEffect(active) {
+        while (active) {
+            withContext(Dispatchers.IO) { runCatching { hub.connection() } }.onSuccess { info = it }
+            delay(5000)
+        }
+    }
+    return info to { it: JSONObject -> info = it }
+}
+
+/** On Início: one line with both grades; a tap opens Ajustes → Conexão. */
+@Composable
+fun ConnectionShortcut(hub: Hub, visible: Boolean, onOpen: () -> Unit) {
+    val (info, _) = rememberConnection(hub, visible)
+    val camera = info?.optJSONObject("camera") ?: return
+    val ai = info.optJSONObject("ai")
+    Row(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette).clickable(onClick = onOpen).padding(14.dp, 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Outlined.Wifi, null, tint = gradeColor(camera.optInt("grade")), modifier = Modifier.size(20.dp))
+        Text("Câmera ", fontSize = 13.sp, color = palette.muted, modifier = Modifier.padding(start = 10.dp))
+        Text(camera.optString("label"), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = gradeColor(camera.optInt("grade")))
+        Text("  ·  IA ", fontSize = 13.sp, color = palette.muted)
+        if (ai?.optString("state") == "on") Text(ai.optString("label"), fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+            color = ai.grade()?.let(::gradeColor) ?: palette.muted)
+        else Text("desligada", fontSize = 13.sp, color = palette.muted)
+        Spacer(Modifier.weight(1f))
+        Text(if (camera.optInt("grade") <= 1) "Reconectar" else "Conexão", fontSize = 12.sp, color = Blue, fontWeight = FontWeight.SemiBold)
+        Icon(Icons.Outlined.ChevronRight, null, tint = palette.muted, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** In Ajustes → Conexão: the camera and the AI, each with its grade, what it means, and "Reconectar". */
+@Composable
+fun ConnectionCard(hub: Hub) {
+    val (info, set) = rememberConnection(hub)
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf<String?>(null) }
+    var note by remember { mutableStateOf<String?>(null) }
+    val again = { what: String ->
+        busy = what; note = null
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { hub.reconnect(what) } }
+                .onSuccess { set(it); note = it.optString("error").takeIf { e -> e.isNotEmpty() }?.let { e -> "Não deu: $e" } ?: "Reconectado." }
+                .onFailure { note = "Não deu: ${it.message}" }
+            busy = null
+        }
+    }
+    Text("Conexão", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+    Column(Modifier.fillMaxWidth().card(palette)) {
+        val camera = info?.optJSONObject("camera")
+        val ai = info?.optJSONObject("ai")
+        ConnectionRow(Icons.Outlined.Videocam, "Câmera", camera?.optString("label"), camera?.optInt("grade"),
+            camera?.optString("detail") ?: "Medindo…", camera?.optString("tip")?.takeIf { it.isNotEmpty() && it != "null" },
+            busy == "camera") { again("camera") }
+        val aiOn = ai?.optString("state") == "on"
+        ConnectionRow(Icons.Outlined.AutoAwesome, "IA (camera-ai)", if (aiOn) ai?.optString("label") else "Desligada",
+            if (aiOn) ai?.grade() else null, ai?.optString("detail") ?: "Medindo…", null, busy == "ai",
+            onReconnect = if (aiOn) ({ again("ai") }) else null)
+    }
+    Text("A câmera é medida pelo tempo que ela demora para responder e pelas quedas da última hora. A IA, pelas análises " +
+        "por segundo e pelo vídeo que chega até ela.", color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+    note?.let { Text(it, color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp)) }
+}
+
+@Composable
+private fun ConnectionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, label: String?, grade: Int?,
+                          detail: String, tip: String?, busy: Boolean, onReconnect: (() -> Unit)?) {
+    Row(Modifier.fillMaxWidth().padding(16.dp, 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconBubble(icon, size = 38)
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                label?.let {
+                    Text(it, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+                        modifier = Modifier.padding(start = 8.dp).clip(RoundedCornerShape(50))
+                            .background(grade?.let(::gradeColor) ?: palette.muted).padding(horizontal = 8.dp, vertical = 2.dp))
+                }
+            }
+            Text(detail, color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            tip?.let { Text(it, color = Orange, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp)) }
+        }
+        if (onReconnect != null) {
+            if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Blue)
+            else TextButton(onClick = onReconnect) { Text("Reconectar", color = Blue) }
+        }
     }
 }

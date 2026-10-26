@@ -298,6 +298,8 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
         Box(Modifier.padding(top = 6.dp, bottom = 14.dp)) {
             StatusDot(live.connected, if (live.connected) "Sistema conectado · 1 câmera ativa" else live.problem ?: "Conectando…")
         }
+        // Shortcut: how the connection is, and a tap goes to Ajustes → Conexão (reconnect there)
+        ConnectionShortcut(hub, visible, onSystem)
 
         // The state of the house first: someone showed up, the camera isn't looking, or all calm
         val recent = (0 until live.activity.length()).mapNotNull { live.activity.optJSONObject(it) }
@@ -803,6 +805,7 @@ fun SystemScreen(live: Live, prefs: android.content.SharedPreferences, onBack: (
                 Text(live.hub?.root?.removePrefix("http://") ?: "—", color = palette.muted, fontSize = 13.sp)
             })
         }
+        live.hub?.let { ConnectionCard(it) }
         // From outside the house: the computer's address on a private network that reaches it (Tailscale, a VPN)
         var remote by remember { mutableStateOf(prefs.getString("remote", "") ?: "") }
         var remoteNote by remember { mutableStateOf<String?>(null) }

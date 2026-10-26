@@ -51,6 +51,8 @@ export function createMeter({ windowSec = 30 } = {}) {
     /** O ffmpeg parou: queda da câmera (counted) ou parada nossa (ninguém assistindo). Recomeça a janela. */
     dropped(counted = true, now = Date.now()) { if (counted) reconnects.push(now); since = 0; frames = []; bytes = []; rest = Buffer.alloc(0); },
     /** O resumo da janela (últimos windowSec segundos), ou null se ainda não deu para medir. */
+    /** Quantas vezes a conexão com a câmera caiu na última hora (mesmo sem vídeo suficiente para o resumo). */
+    drops(now = Date.now()) { trim(now); return reconnects.length; },
     summary(now = Date.now()) {
       trim(now);
       if (frames.length < 10) return null;

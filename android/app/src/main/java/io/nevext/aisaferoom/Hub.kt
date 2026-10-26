@@ -31,6 +31,11 @@ class Hub(val root: String, val key: String?) {
     /** What the camera offers now: lenses, video, AI, controls (/api/screen). Locked without a valid key. */
     fun screen(): JSONObject = json(base + "/api/screen")
 
+    /** How the camera and the AI are connected: grade 0–3 (Péssimo, Regular, Bom, Ótimo) and a line of detail. */
+    fun connection(): JSONObject = json("$base/api/connection")
+    /** "Reconectar": [what] is "camera" or "ai". Returns the connection as it is after. */
+    fun reconnect(what: String): JSONObject = json("$base/api/connection", JSONObject().put("reconnect", what).toString())
+
     /** Changes one control (night vision, white light, follow…); returns all controls as they are now. */
     fun control(id: String, value: Any): JSONArray {
         val reply = json(base + "/api/screen/control", JSONObject().put("id", id).put("value", value).toString())

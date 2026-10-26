@@ -89,6 +89,11 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       tela cheia e menu.
 - [x] Qualidade: automática / alta / fluido (menu ☰).
 
+- [x] **Conexão da câmera e da IA (Péssimo, Regular, Bom, Ótimo) e "Reconectar":** em Ajustes → Conexão e um
+      atalho no Início. A câmera pelo ping (a porta do vídeo engana: a câmera ocupada demora para atender) e pelas
+      quedas da última hora; a IA pelas análises por segundo e o vídeo que chega a ela. Reconectar a câmera recomeça
+      o vídeo e o controle; a IA, a análise. Logo depois mostra "Reconectando…" em vez de uma nota ruim.
+
 ## 🔜 Pendente / próximos
 
 ### Empacotar como app (APK)
