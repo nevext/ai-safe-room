@@ -116,8 +116,12 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     }
     val player = remember(url, visible, attempt) {
         val u = url
-        if (u == null || !visible) null else ExoPlayer.Builder(context).build().apply {
-            setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(MediaItem.fromUri(u)))
+        // Little reserve to start (live, not 8 s behind); waits 15 s for the camera before giving up (a Wi-Fi burst
+        // isn't a reason to reconnect)
+        if (u == null || !visible) null else ExoPlayer.Builder(context).setLoadControl(
+            androidx.media3.exoplayer.DefaultLoadControl.Builder().setBufferDurationsMs(300, 3000, 100, 300).build()
+        ).build().apply {
+            setMediaSource(RtspMediaSource.Factory().setForceUseRtpTcp(true).setTimeoutMs(15_000).createMediaSource(MediaItem.fromUri(u)))
             volume = 0f
             playWhenReady = true
             addListener(object : Player.Listener {
@@ -135,6 +139,22 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     DisposableEffect(player) { onDispose { player?.release(); playing = false } }
     // The room's sound comes in the camera's own stream: just turn it up
     LaunchedEffect(player, live.listen) { player?.volume = if (live.listen) 1f else 0f }
+    // Stay live, like the TV: the reserve starts small and grows only when the camera's Wi-Fi stutters (each freeze adds
+    // 300 ms, up to 2 s); when more than that piles up, play a little faster until caught up
+    LaunchedEffect(player) {
+        val p = player ?: return@LaunchedEffect
+        var target = 300L
+        var lastBuffering = false
+        while (true) {
+            delay(500)
+            val buffering = p.playbackState == Player.STATE_BUFFERING
+            if (buffering && !lastBuffering && playing) target = (target + 300).coerceAtMost(2000)
+            lastBuffering = buffering
+            val ahead = p.totalBufferedDuration
+            val speed = when { ahead > target + 1500 -> 1.25f; ahead > target + 400 -> 1.1f; else -> 1f }
+            if (p.playbackParameters.speed != speed) p.setPlaybackSpeed(speed)
+        }
+    }
     // The camera dropped: try again in a few seconds
     LaunchedEffect(failed) {
         if (!failed) return@LaunchedEffect
