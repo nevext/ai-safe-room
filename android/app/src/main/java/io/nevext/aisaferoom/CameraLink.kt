@@ -35,13 +35,38 @@ class CameraLink private constructor(private val context: Context) {
         synchronized(this) { session?.close(); session = null }
     }
 
-    /** The control session, opened (or reopened) when needed. */
+    /** The control session, opened (or reopened) when needed; the camera's alerts come on it too. */
     @Synchronized
     fun dvr(): Dvrip {
         session?.takeIf { !it.closed }?.let { return it }
         val a = access ?: throw IOException("o app ainda não conhece a câmera")
-        return Dvrip.open(a.addr, a.user, a.pass).also { session = it }
+        return Dvrip.open(a.addr, a.user, a.pass).also { session = it; if (alarmListeners.isNotEmpty()) watchAlarms(it) }
     }
+
+    // The camera's own alerts (1504, after asking with 1500): person (its own detection), motion, covered
+    private val alarmListeners = java.util.concurrent.CopyOnWriteArraySet<(String, Boolean) -> Unit>()
+    private fun watchAlarms(d: Dvrip) {
+        runCatching { d.request(1500, JSONObject().put("Name", "")) }
+        d.listen { id, msg ->
+            if (id != 1504 || msg !is JSONObject) return@listen
+            val info = msg.optJSONObject("AlarmInfo") ?: msg
+            val event = info.optString("Event")
+            val start = info.optString("Status").equals("Start", ignoreCase = true)
+            for (fn in alarmListeners) runCatching { fn(event, start) }
+        }
+    }
+    /** Hears the camera's alerts (event name, started or stopped) while the returned function isn't called. */
+    fun alarms(fn: (String, Boolean) -> Unit): () -> Unit {
+        val first = alarmListeners.isEmpty()
+        alarmListeners.add(fn)
+        if (first) synchronized(this) { session?.takeIf { !it.closed }?.let { watchAlarms(it) } }
+        return { alarmListeners.remove(fn) }
+    }
+
+    /** Protection without the computer: kept on the phone (the computer's own wins when it's there). */
+    var protection: Boolean
+        get() = prefs.getBoolean("protectionOn", false)
+        set(on) { prefs.edit().putBoolean("protectionOn", on).apply() }
     private fun <T> withDvr(block: (Dvrip) -> T): T = try { block(dvr()) } catch (e: IOException) {
         synchronized(this) { session?.close(); session = null }
         block(dvr())   // the camera dropped the session: once more
@@ -198,6 +223,7 @@ class CameraLink private constructor(private val context: Context) {
             .put("controls", controls)
             .put("ptz", true)
             .put("cameraPerson", runCatching { person() }.getOrNull() == true)
+            .put("protection", JSONObject().put("on", protection))
             .put("phoneOnly", true)
     }
 

@@ -29,6 +29,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <receiver android:name=".NotifyActions" android:exported="false" />
         <service
             android:name=".Guard"
             android:exported="false"

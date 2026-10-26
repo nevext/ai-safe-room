@@ -652,7 +652,14 @@ function watchAlarms(d) {
     if (perfil && perfil.status('camPerson') !== 'ok') { perfil.verify('camPerson', 'ok', `a câmera avisou pessoa (${event})`); perfil.save(); }
     if (aiSettings.enabled && aiSettings.detect) return;   // com a IA, quem anota é ela
     const now = Date.now(), v = camPerson.visit;
-    if (v && now - camPerson.lastAt < VISIT_GAP) { v.until = now; saveActivity(); broadcast({ type: 'activity', update: true, item: v }); }
+    if (v && now - camPerson.lastAt < VISIT_GAP) {
+      v.until = now;
+      // A visita começou com a Proteção desligada e ela foi ligada com alguém ainda no cômodo: avisa agora
+      const late = protection.on && !v.alert;
+      if (late) v.alert = true;
+      saveActivity();
+      broadcast({ type: 'activity', update: true, alertNow: late || undefined, item: v });
+    }
     else logActivity('person', `Pessoa no ${perfil?.data.name || 'Câmera'}`, { thumb: true, label: 'Pessoa', people: 1 })
       .then(e => { camPerson.visit = e || null; if (e) e.byCamera = true; });
     camPerson.lastAt = now;
@@ -1321,6 +1328,10 @@ function arrivals(r) {
     const v = p.visit;
     if (v && !v.pending && now - p.lastSeen < VISIT_GAP) {
       v.until = now;
+      if (protection.on && !v.alert && !v.waiting && !(kind === 'person' && protection.onlyUnknown && faces && people.list().length)) {
+        v.alert = true; saveActivity();
+        broadcast({ type: 'activity', update: true, alertNow: true, item: v });   // Proteção ligada com alguém já no cômodo
+      }
       if (count > (v.people || 1)) { v.people = count; v.text = kind === 'person' ? visitText(v) : `${name} no ${where}`; p.savedAt = 0; }
       // Guarda e avisa as telas no máximo a cada 30 s (a visita pode durar horas)
       if (now - p.savedAt > 30000) {
@@ -1372,10 +1383,13 @@ function setProtection(on, why = '') {
   if (protection.on === !!on) return;
   protection.on = !!on;
   saveState();
-  logActivity('protection', on ? 'Proteção ativada' : 'Proteção desativada');
+  logActivity('protection', on ? 'Proteção ativada' : 'Proteção desativada', { label: why || null });   // o celular avisa quando foi pelo horário
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Proteção: ${on ? 'ativada' : 'desativada'}${why ? ' (' + why + ')' : ''}`);
 }
 let protectionTurn = null;
+setInterval(() => {
+  if (protection.resumeAt && Date.now() >= protection.resumeAt) { delete protection.resumeAt; setProtection(true, 'fim da pausa'); saveState(); }
+}, 15000).unref();
 setInterval(() => {
   const s = protection.schedule;
   if (!s?.enabled) return;
@@ -2125,6 +2139,7 @@ function accessRequest(req, name) {
   const r = { id: crypto.randomBytes(16).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), ip, at: Date.now(), status: 'pending' };
   requests.set(r.id, r);
   console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${ip}) pediu acesso: permita no navegador do PC ou do celular`);
+  broadcast({ type: 'access', item: { id: r.id, name: r.name, ip } });   // os celulares avisam, com Permitir e Recusar
   return { ok: true, id: r.id };
 }
 function accessStatus(id) {
@@ -2360,6 +2375,9 @@ const server = http.createServer(async (req, res) => {
           if (b.on != null) setProtection(b.on, 'pedido');
           if (b.schedule !== undefined) { protection.schedule = b.schedule; saveState(); }
           if (b.onlyUnknown != null) { protection.onlyUnknown = !!b.onlyUnknown; saveState(); }
+          // "Pausar 1 h" (da notificação): desliga e volta sozinha
+          if (b.pauseMinutes) { protection.resumeAt = Date.now() + Math.min(24 * 60, +b.pauseMinutes) * 60e3; setProtection(false, 'pausa'); saveState(); }
+          if (b.on === true) { delete protection.resumeAt; saveState(); }
         }
         return json(res, 200, { ok: true, ...protection });
       }

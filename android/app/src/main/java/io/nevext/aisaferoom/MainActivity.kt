@@ -55,6 +55,7 @@ sealed interface Screen {
     data object Ai : Screen
     data object Diagnostics : Screen
     data object Summaries : Screen
+    data object Notifications : Screen
     data class Soon(val title: String) : Screen
 }
 
@@ -173,6 +174,8 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             val r = withContext(Dispatchers.IO) { runCatching { h.screen() to runCatching { h.activity() }.getOrNull() } }
             r.onSuccess { (info, act) ->
                 live.info = info
+                // Protection's state on the phone too: without the computer, the camera's own alerts follow it
+                if (!info.optBoolean("phoneOnly")) info.optJSONObject("protection")?.let { CameraLink.current()?.protection = it.optBoolean("on") }
                 live.controls = info.optJSONArray("controls") ?: JSONArray()
                 live.connected = info.optJSONObject("camera")?.optBoolean("connected") == true
                 if (act != null) live.activity = act
@@ -237,7 +240,15 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
     }
 
     LaunchedEffect(asked.value, live.connected) {
-        if (asked.value == "activity" && live.hub != null && screen != Screen.Splash) { tab = Screen.Activity; screen = Screen.Activity; asked.value = null }
+        if (live.hub == null || screen == Screen.Splash) return@LaunchedEffect
+        // From a notification: what happened, the camera live, or the days' summary
+        when (asked.value) {
+            "activity" -> { tab = Screen.Activity; screen = Screen.Activity }
+            "live" -> { tab = Screen.Home; screen = Screen.Camera }
+            "summaries" -> { tab = Screen.Activity; screen = Screen.Summaries }
+            else -> return@LaunchedEffect
+        }
+        asked.value = null
     }
     LaunchedEffect(screen) {
         if (screen == Screen.Activity) { live.seenAt = System.currentTimeMillis(); prefs.edit().putLong("seenAt", live.seenAt).apply() }
@@ -298,6 +309,10 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             Screen.Diagnostics -> if (h != null) {
                 BackHandler(onBack = back)
                 DiagnosticsScreen(live, onBack = back)
+            }
+            Screen.Notifications -> {
+                BackHandler(onBack = back)
+                NotificationsScreen(live, prefs, onBack = back)
             }
             Screen.Summaries -> if (h != null) {
                 BackHandler(onBack = back)

@@ -172,7 +172,12 @@ class Hub(val root: String, val key: String?) {
     }
 
     /** Protection (away mode): on, and its schedule. */
-    fun setProtection(on: Boolean): JSONObject = json("$base/api/protection", JSONObject().put("on", on).toString())
+    /** Protection on or off: on the computer; with it away, on the phone (the camera's own person detection warns). */
+    fun setProtection(on: Boolean): JSONObject = runCatching { json("$base/api/protection", JSONObject().put("on", on).toString(), timeoutMs = 6_000) }
+        .onSuccess { CameraLink.current()?.protection = on }
+        .getOrElse { e -> CameraLink.current()?.takeIf { it.access != null }?.let { it.protection = on; JSONObject().put("ok", true).put("on", on) } ?: throw e }
+    /** "Pausar 1 h": off now, back by itself. */
+    fun pauseProtection(minutes: Int): JSONObject = json("$base/api/protection", JSONObject().put("pauseMinutes", minutes).toString())
     fun setOnlyUnknown(on: Boolean): JSONObject = json("$base/api/protection", JSONObject().put("onlyUnknown", on).toString())
     fun setProtectionSchedule(enabled: Boolean, on: String, off: String): JSONObject = json("$base/api/protection",
         JSONObject().put("schedule", JSONObject().put("enabled", enabled).put("on", on).put("off", off)).toString())
@@ -224,6 +229,9 @@ class Hub(val root: String, val key: String?) {
     }
 
     companion object {
+        /** Whether the computer itself answers (not the camera standing in for it): quick, for the notifications. */
+        fun ping(h: Hub): Boolean = runCatching { json(h.base + "/api/state", timeoutMs = 4_000); true }.getOrDefault(false)
+
         const val DISCOVERY_PORT = 8788
 
         /** Asks the network "camera-ai?" and collects who answers for waitMs. */

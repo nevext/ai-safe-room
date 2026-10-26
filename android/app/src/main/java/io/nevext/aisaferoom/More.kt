@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Face
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Schedule
@@ -402,5 +403,59 @@ private fun ConnectionRow(icon: androidx.compose.ui.graphics.vector.ImageVector,
             if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Blue)
             else TextButton(onClick = onReconnect) { Text("Reconectar", color = Blue) }
         }
+    }
+}
+
+// MARK: - Notificações
+
+private val NOTIFY_KINDS = listOf(
+    Triple("notifyPerson", "Pessoa no cômodo", "Com a Proteção ligada. Com som e a foto; uma por visita, com o nome quando reconhecer o rosto"),
+    Triple("notifyAnimal", "Animal", "Com a Proteção ligada, se a casa tem animais (precisa da IA)"),
+    Triple("notifyOffline", "Câmera offline ou coberta", "Pode ser alguém mexendo nela"),
+    Triple("notifyAccess", "Alguém pediu acesso", "Um aparelho novo querendo entrar: Permitir ou Recusar na própria notificação"),
+    Triple("summary", "Resumo do dia", "Às 21h, sem som"),
+    Triple("notifyWeak", "Conexão da câmera fraca", "Sem som, no máximo a cada 6 horas"),
+    Triple("notifySchedule", "Proteção pelo horário", "Quando ela liga ou desliga sozinha, sem som"),
+)
+
+/** Ajustes → Notificações: which warnings reach the notification bar. */
+@Composable
+fun NotificationsScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var master by remember { mutableStateOf(prefs.getBoolean("notify", false)) }
+    val states = remember { NOTIFY_KINDS.associate { it.first to mutableStateOf(prefs.getBoolean(it.first, true)) } }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) { master = true; prefs.edit().putBoolean("notify", true).apply(); Guard.start(context) }
+    }
+    Page {
+        TopBar("", null, onBack)
+        PageTitle("Notificações", "O que aparece na barra do celular")
+        Column(Modifier.fillMaxWidth().card(palette, selected = master)) {
+            SwitchRow(Icons.Outlined.NotificationsActive, "Avisos neste celular",
+                if (master) "Ligados: o app fica de olho mesmo fechado" else "Desligados: nada chega na barra", master) { on ->
+                if (on && Build.VERSION.SDK_INT >= 33 &&
+                    context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    ask.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    master = on; prefs.edit().putBoolean("notify", on).apply()
+                    if (on) Guard.start(context) else Guard.stop(context)
+                }
+            }
+        }
+        Text("Alertas tocam e aparecem na tela bloqueada. Os outros chegam sem som, e de madrugada (23h às 7h) só os alertas. " +
+            "Sem o computador, o celular ouve a própria câmera: a pessoa e a câmera offline continuam chegando.",
+            color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 14.dp))
+        Column(Modifier.fillMaxWidth().card(palette)) {
+            NOTIFY_KINDS.forEach { (key, title, text) ->
+                val state = states.getValue(key)
+                ListRow(Icons.Outlined.Notifications, title, text, onClick = {
+                    state.value = !state.value; prefs.edit().putBoolean(key, state.value).apply()
+                }, trailing = {
+                    Switch(state.value, onCheckedChange = { state.value = it; prefs.edit().putBoolean(key, it).apply() }, enabled = master,
+                        colors = SwitchDefaults.colors(checkedTrackColor = Blue))
+                })
+            }
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }

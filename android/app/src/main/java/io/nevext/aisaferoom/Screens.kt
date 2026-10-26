@@ -47,6 +47,7 @@ import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
@@ -812,6 +813,7 @@ fun SettingsScreen(onOpen: (Screen) -> Unit) {
             ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos, zonas e vistoria", onClick = { onOpen(Screen.Features) })
             ListRow(Icons.Outlined.AutoAwesome, "Inteligência (IA)", "Ligar a IA, os recursos e o rigor", onClick = { onOpen(Screen.Ai) })
             ListRow(Icons.Outlined.Notifications, "Proteção e avisos", "Avisos no celular e horário", onClick = { onOpen(Screen.Protection) })
+            ListRow(Icons.Outlined.NotificationsActive, "Notificações", "Quais avisos aparecem na barra do celular", onClick = { onOpen(Screen.Notifications) })
             ListRow(Icons.Outlined.Face, "Pessoas conhecidas", "Reconhecer as pessoas da casa pelo rosto", onClick = { onOpen(Screen.People) })
             ListRow(Icons.Outlined.Group, "Família e aparelhos", "Quem tem acesso às câmeras", onClick = { onOpen(Screen.Family) })
             ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Soon("Armazenamento")) })

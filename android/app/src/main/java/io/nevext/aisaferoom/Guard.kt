@@ -5,9 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
@@ -16,27 +18,28 @@ import java.util.Calendar
 import kotlin.concurrent.thread
 
 /**
- * Keeps listening to the home computer while the app is closed and warns on the phone: someone (or an animal)
- * showed up while Protection is on, with the photo; the camera went offline; its connection got weak; and the
- * day's summary at 21:00. Inside the house it reaches the computer on the Wi-Fi; outside, at the address set in
- * Conexão (if any).
+ * Keeps an eye on the house while the app is closed and puts it in the notification bar.
+ *
+ * Alerts (sound, vibration, the photo; shown on the lock screen): someone in the room while Protection is on (with the
+ * name when the face is known, one per visit), an animal (if the house has animals), the camera offline or covered,
+ * a device asking to come in (Permitir / Recusar right there). Quiet notices: the day's summary, a weak connection (at
+ * most every 6 h), Protection turned on or off by its schedule. Fixed: "De olho na casa", with Protection's state.
+ *
+ * With the computer reachable (home Wi-Fi or the address from outside) it listens to it; with it away, straight to the
+ * camera: its own person detection still warns, like the camera's original app. At night (23h–7h) only alerts sound.
+ * Each kind can be turned off in Ajustes → Notificações.
  */
 class Guard : Service() {
     @Volatile private var running = false
+    private val prefs get() = getSharedPreferences("aisaferoom", Context.MODE_PRIVATE)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         channels(this)
-        val ongoing = Notification.Builder(this, STATUS)
-            .setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("AI Safe Room")
-            .setContentText("De olho na casa: avisa quando aparecer alguém")
-            .setContentIntent(openApp(this, null))
-            .setOngoing(true)
-            .build()
-        if (Build.VERSION.SDK_INT >= 34) startForeground(1, ongoing, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        else startForeground(1, ongoing)
+        val ongoing = ongoing(this, CameraLink.get(this).protection)
+        if (Build.VERSION.SDK_INT >= 34) startForeground(ONGOING, ongoing, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        else startForeground(ONGOING, ongoing)
         if (!running) {
             running = true
             thread(name = "guard", isDaemon = true) { listen() }
@@ -50,59 +53,113 @@ class Guard : Service() {
         super.onDestroy()
     }
 
-    private val prefs get() = getSharedPreferences("aisaferoom", Context.MODE_PRIVATE)
-
-    /** The computer, trying the home address and then the one from outside. */
-    private fun reachable(): Hub? {
-        val root = prefs.getString("root", null) ?: return null
-        val key = prefs.getSecret("key")
-        val remote = prefs.getString("remote", null)
-        for (r in listOfNotNull(root, remote)) {
-            val h = Hub(r, key)
-            if (runCatching { h.screen() }.isSuccess) return h
-        }
-        return null
-    }
-
     private fun listen() {
         while (running) {
-            val hub = reachable()
+            val hub = reachable(this)
             if (hub != null) {
+                cameraAway = 0L
                 runCatching {
                     hub.events({ e ->
-                        // A visit that waited for the face ("só desconhecidos") comes again as an update with alertNow
-                        if (e.optString("type") == "activity" && (!e.optBoolean("update") || e.optBoolean("alertNow")))
-                            e.optJSONObject("item")?.let { onActivity(hub, it) }
+                        when (e.optString("type")) {
+                            // A visit that waited for the face ("só desconhecidos") comes again as an update with alertNow
+                            "activity" -> if (!e.optBoolean("update") || e.optBoolean("alertNow")) e.optJSONObject("item")?.let { onActivity(hub, it) }
+                            "access" -> e.optJSONObject("item")?.let { onAccess(it) }
+                        }
                     }, { running })
                 }
-            }
+            } else directFromCamera()
             if (running) Thread.sleep(10_000)
         }
     }
+
+    // MARK: - Without the computer: the camera's own alerts
+
+    private var cameraAway = 0L
+    private var lastPersonAt = 0L
+    private var visitId = 0
+    private fun directFromCamera() {
+        val link = CameraLink.get(this)
+        if (link.access == null) return
+        val stop = link.alarms { event, start ->
+            if (!start || !link.protection) return@alarms
+            when {
+                Regex("human|ped|person|people|body", RegexOption.IGNORE_CASE).containsMatchIn(event) -> {
+                    val now = System.currentTimeMillis()
+                    val newVisit = now - lastPersonAt > 10 * 60_000
+                    lastPersonAt = now
+                    if (newVisit) visitId = (now / 1000).toInt()
+                    if (on("notifyPerson")) {
+                        val picture = runCatching { link.snapshot() }.getOrNull()?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                        // One notification per visit: later sightings only refresh the photo, silently
+                        alert(visitId, "Pessoa no ${link.access?.name ?: "Quarto"}", "A câmera viu alguém agora", picture,
+                            silent = !newVisit, actions = listOf(view(), pause()))
+                    }
+                }
+                Regex("blind|cover|shelter", RegexOption.IGNORE_CASE).containsMatchIn(event) && on("notifyOffline") ->
+                    alert(OFFLINE, "Câmera coberta", "${link.access?.name ?: "A câmera"}: a imagem foi tapada", null, actions = listOf(view()))
+            }
+        }
+        // Stays on the camera until the computer is back; checks the camera answers (offline warning after 1 min)
+        try {
+            var tries = 0
+            while (running && reachable(this) == null) {
+                val ok = runCatching { link.dvr() }.isSuccess
+                if (ok) cameraAway = 0L
+                else if (cameraAway == 0L) cameraAway = System.currentTimeMillis()
+                else if (System.currentTimeMillis() - cameraAway > 60_000 && on("notifyOffline")) {
+                    alert(OFFLINE, "Câmera offline", "${link.access?.name ?: "A câmera"} não responde no Wi-Fi", null)
+                    cameraAway = Long.MAX_VALUE / 2   // once per outage
+                }
+                Thread.sleep(if (++tries < 3) 10_000 else 30_000)
+            }
+        } finally { stop() }
+    }
+
+    // MARK: - From the computer
 
     private fun onActivity(hub: Hub, a: JSONObject) {
         val type = a.optString("type")
         when {
             (type == "person" || type == "animal") && a.optBoolean("alert") -> {
+                if (!on(if (type == "person") "notifyPerson" else "notifyAnimal")) return
                 val picture = a.optString("thumb").takeIf { it.isNotEmpty() && it != "null" }
                     ?.let { runCatching { hub.bytes(hub.thumbUrl(it)) }.getOrNull() }
                     ?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-                notify(ALERTS, a.optLong("at").toInt(), a.optString("text"), "Toque para ver o que aconteceu", picture)
+                alert(a.optLong("at").toInt(), a.optString("text"), "Toque para ver o que aconteceu", picture,
+                    actions = listOf(view(), mistake(a.optLong("at"), type), pause()))
             }
-            type == "offline" -> notify(ALERTS, 2, "Câmera offline", "${a.optString("camera")}: o computador não acha a câmera", null)
-            type == "quality" && a.optString("text").contains("fraca") ->
-                notify(SUMMARY, 3, "Conexão da câmera fraca", "A imagem pode travar. Veja o Wi-Fi perto da câmera.", null)
+            type == "offline" && on("notifyOffline") -> alert(OFFLINE, "Câmera offline", "${a.optString("camera")}: a câmera não responde", null)
+            type == "quality" && a.optString("text").contains("fraca") && on("notifyWeak") -> {
+                // At most every 6 hours: a weak Wi-Fi tends to stay weak
+                if (System.currentTimeMillis() - prefs.getLong("weakAt", 0) < 6 * 3600_000) return
+                prefs.edit().putLong("weakAt", System.currentTimeMillis()).apply()
+                quiet(WEAK, "Conexão da câmera fraca", "A imagem pode travar. Veja o Wi-Fi perto da câmera.")
+            }
+            type == "protection" -> {
+                val on = a.optString("text").contains("ativada")
+                CameraLink.get(this).protection = on
+                getSystemService(NotificationManager::class.java).notify(ONGOING, ongoing(this, on))
+                if (a.optString("label") in setOf("horário", "fim da pausa") && on("notifySchedule"))
+                    quiet(SCHEDULE, if (on) "Proteção ativada" else "Proteção desativada",
+                        if (a.optString("label") == "horário") "Pelo horário que você marcou" else "A pausa de 1 hora acabou")
+            }
         }
     }
 
-    /** Once a day at 21:00: how the day went. */
+    private fun onAccess(r: JSONObject) {
+        if (!on("notifyAccess")) return
+        val id = r.optString("id")
+        alert(id.hashCode(), "${r.optString("name")} quer entrar", "Pediu acesso às câmeras (${r.optString("ip")}). Só permita se for de casa.", null,
+            actions = listOf(action("allow", "Permitir", id.hashCode(), "id" to id), action("deny", "Recusar", id.hashCode(), "id" to id)))
+    }
+
+    /** Once a day (21:00): how the day went. */
     private fun summaries() {
         while (running) {
             val now = Calendar.getInstance()
             val today = now.get(Calendar.YEAR) * 1000 + now.get(Calendar.DAY_OF_YEAR)
-            if (prefs.getBoolean("summary", true) && now.get(Calendar.HOUR_OF_DAY) >= 21 && prefs.getInt("summaryDay", 0) != today) {
-                val hub = reachable()
-                val list = hub?.let { runCatching { it.activity() }.getOrNull() }
+            if (on("summary") && now.get(Calendar.HOUR_OF_DAY) >= 21 && prefs.getInt("summaryDay", 0) != today) {
+                val list = reachable(this)?.let { runCatching { it.activity() }.getOrNull() }
                 if (list != null) {
                     val start = now.clone() as Calendar
                     start.set(Calendar.HOUR_OF_DAY, 0); start.set(Calendar.MINUTE, 0)
@@ -112,11 +169,11 @@ class Guard : Service() {
                     val moves = items.filter { it.optString("type") == "motion" }.sumOf { it.optInt("count", 1) }
                     val text = when {
                         people == 0 && animals == 0 -> "Dia tranquilo: ninguém apareceu" + if (moves > 0) " ($moves movimentos)." else "."
-                        else -> listOfNotNull(people.takeIf { it > 0 }?.let { "$it ${if (it == 1) "pessoa" else "pessoas"}" },
+                        else -> listOfNotNull(people.takeIf { it > 0 }?.let { "$it ${if (it == 1) "visita" else "visitas"}" },
                             animals.takeIf { it > 0 }?.let { "$it ${if (it == 1) "animal" else "animais"}" },
                             moves.takeIf { it > 0 }?.let { "$it movimentos" }).joinToString(" · ")
                     }
-                    notify(SUMMARY, 4, "Resumo do dia", text, null)
+                    quiet(SUMMARY_ID, "Resumo do dia", text, open = "summaries")
                     prefs.edit().putInt("summaryDay", today).apply()
                 }
             }
@@ -124,31 +181,95 @@ class Guard : Service() {
         }
     }
 
-    private fun notify(channel: String, id: Int, title: String, text: String, picture: android.graphics.Bitmap?) {
-        val b = Notification.Builder(this, channel)
+    // MARK: - Showing them
+
+    private fun on(kind: String) = prefs.getBoolean(kind, true)
+    private val night: Boolean get() = Calendar.getInstance().get(Calendar.HOUR_OF_DAY).let { it >= 23 || it < 7 }
+
+    private fun alert(id: Int, title: String, text: String, picture: Bitmap?, silent: Boolean = false, actions: List<Notification.Action> = listOf(view())) {
+        val b = Notification.Builder(this, ALERTS)
             .setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(title)
             .setContentText(text)
             .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_ALARM)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(silent)
             .setContentIntent(openApp(this, "activity"))
         if (picture != null) b.setLargeIcon(picture).setStyle(Notification.BigPictureStyle().bigPicture(picture))
+        actions.forEach { b.addAction(it) }
         getSystemService(NotificationManager::class.java).notify(id, b.build())
+    }
+    private fun quiet(id: Int, title: String, text: String, open: String? = null) {
+        if (night) return   // at night only alerts
+        val b = Notification.Builder(this, NOTICES)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setContentIntent(openApp(this, open))
+        getSystemService(NotificationManager::class.java).notify(id, b.build())
+    }
+
+    private fun view() = Notification.Action.Builder(null, "Ver ao vivo", openApp(this, "live")).build()
+    private fun pause() = action("pause", "Pausar 1 h", PAUSE)
+    private fun mistake(at: Long, type: String) = action("mistake", "Foi engano", at.toInt(), "at" to at.toString(), "type" to type)
+    private fun action(what: String, label: String, id: Int, vararg extras: Pair<String, String>): Notification.Action {
+        val intent = Intent(this, NotifyActions::class.java).setAction(what).putExtra("notification", id)
+        extras.forEach { (k, v) -> intent.putExtra(k, v) }
+        val pending = PendingIntent.getBroadcast(this, (what + id).hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        return Notification.Action.Builder(null, label, pending).build()
     }
 
     companion object {
         const val ALERTS = "alerts"
         const val STATUS = "status"
-        const val SUMMARY = "summary"
+        const val NOTICES = "summary"
+        private const val ONGOING = 1
+        private const val OFFLINE = 2
+        private const val WEAK = 3
+        private const val SUMMARY_ID = 4
+        private const val SCHEDULE = 5
+        private const val PAUSE = 6
 
         fun channels(c: Context) {
             val nm = c.getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(NotificationChannel(ALERTS, "Alertas", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Alguém apareceu, câmera offline"
+                description = "Alguém no cômodo com a Proteção ligada, câmera offline ou coberta, pedido de acesso"
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             })
-            nm.createNotificationChannel(NotificationChannel(SUMMARY, "Resumo e avisos", NotificationManager.IMPORTANCE_DEFAULT))
+            nm.createNotificationChannel(NotificationChannel(NOTICES, "Resumo e avisos", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Resumo do dia, conexão fraca, Proteção pelo horário (sem som)"
+            })
             nm.createNotificationChannel(NotificationChannel(STATUS, "De olho na casa", NotificationManager.IMPORTANCE_MIN).apply {
-                description = "Fica enquanto os avisos estão ligados"
+                description = "Fica enquanto os avisos estão ligados (o Android pede, para o app continuar ouvindo)"
             })
+        }
+
+        /** The fixed one: what Protection is doing, and the button to change it. */
+        fun ongoing(c: Context, protection: Boolean): Notification {
+            val toggle = PendingIntent.getBroadcast(c, 77, Intent(c, NotifyActions::class.java).setAction(if (protection) "off" else "on"),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            return Notification.Builder(c, STATUS)
+                .setSmallIcon(R.drawable.ic_notify)
+                .setContentTitle("De olho na casa")
+                .setContentText(if (protection) "Proteção ativada: avisa quando aparecer alguém" else "Proteção desativada: só guarda as atividades")
+                .setContentIntent(openApp(c, null))
+                .addAction(Notification.Action.Builder(null, if (protection) "Desativar" else "Ativar", toggle).build())
+                .setOngoing(true)
+                .build()
+        }
+
+        /** The computer, trying the home address and then the one from outside. */
+        fun reachable(c: Context): Hub? {
+            val prefs = c.getSharedPreferences("aisaferoom", Context.MODE_PRIVATE)
+            val root = prefs.getString("root", null) ?: return null
+            val key = prefs.getSecret("key")
+            for (r in listOfNotNull(root, prefs.getString("remote", null))) {
+                val h = Hub(r, key)
+                if (runCatching { Hub.ping(h) }.getOrDefault(false)) return h
+            }
+            return null
         }
 
         fun openApp(c: Context, open: String?): PendingIntent = PendingIntent.getActivity(c, open?.hashCode() ?: 0,
@@ -157,5 +278,32 @@ class Guard : Service() {
 
         fun start(c: Context) = c.startForegroundService(Intent(c, Guard::class.java))
         fun stop(c: Context) = c.stopService(Intent(c, Guard::class.java))
+    }
+}
+
+/** The buttons on the notifications: Permitir / Recusar, Foi engano, Pausar 1 h, Ativar / Desativar. */
+class NotifyActions : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val done = goAsync()
+        val nm = context.getSystemService(NotificationManager::class.java)
+        thread {
+            try {
+                val hub = Guard.reachable(context)
+                when (intent.action) {
+                    "allow", "deny" -> hub?.answerAccess(intent.getStringExtra("id") ?: "", intent.action == "allow")
+                    "mistake" -> hub?.forget(intent.getStringExtra("at")?.toLongOrNull() ?: 0, intent.getStringExtra("type") ?: "person")
+                    "pause" -> hub?.pauseProtection(60) ?: run { CameraLink.get(context).protection = false }
+                    "on", "off" -> {
+                        val on = intent.action == "on"
+                        runCatching { (hub ?: Hub("http://0.0.0.0", null)).setProtection(on) }
+                        CameraLink.get(context).protection = on
+                        nm.notify(1, Guard.ongoing(context, on))
+                    }
+                }
+                val id = intent.getIntExtra("notification", 0)
+                if (id != 0) nm.cancel(id)
+            } catch (_: Exception) {
+            } finally { done.finish() }
+        }
     }
 }
