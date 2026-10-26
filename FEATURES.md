@@ -94,6 +94,15 @@ Lista do que já funciona e do que falta. Marcar aqui conforme avança.
       quedas da última hora; a IA pelas análises por segundo e o vídeo que chega a ela. Reconectar a câmera recomeça
       o vídeo e o controle; a IA, a análise. Logo depois mostra "Reconectando…" em vez de uma nota ruim.
 
+- [x] **IA é escolha da pessoa (como na TV):** Ajustes → Inteligência (IA). Desligada (padrão), o app mostra a câmera
+      direto pelo RTSP (Media3), sem o camera-ai no caminho; ligada, cada recurso é escolhido (atividades, seguir,
+      rostos, zonas) e fica como deixou. A Proteção pede a IA ligada.
+- [x] **Rigor da detecção:** só com certeza, equilibrado ou qualquer suspeita.
+- [x] **Diagnóstico:** Wi-Fi da câmera (10 pings, perdas, variação, quedas), câmera e IA (análises por segundo, vídeo
+      que chega) e a vistoria completa, quando a pessoa quiser.
+- [x] **Resumo dos dias:** os últimos 30 dias (visitas, quantas pessoas juntas, nomes, animais, movimentos, avisos),
+      tocando no "Hoje" das Atividades; o aviso das 21h fica lá.
+
 ## 🔜 Pendente / próximos
 
 ### Empacotar como app (APK)

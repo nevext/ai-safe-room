@@ -33,6 +33,16 @@ class Hub(val root: String, val key: String?) {
 
     /** How the camera and the AI are connected: grade 0–3 (Péssimo, Regular, Bom, Ótimo) and a line of detail. */
     fun connection(): JSONObject = json("$base/api/connection")
+
+    /** The camera's RTSP addresses (with its login), to watch direct without the AI. */
+    fun directStream(): JSONObject = json("$base/api/screen/direct-stream")
+    /** The AI: on or off (off by default), its features and the rigor. */
+    fun ai(): JSONObject = json("$base/api/ai")
+    fun setAi(body: JSONObject): JSONObject = json("$base/api/ai", body.toString())
+    /** One line per day, last 30 days. */
+    fun summaries(): JSONArray = json("$base/api/summaries").optJSONArray("days") ?: JSONArray()
+    /** "wifi", "ai" or "camera": takes some seconds. */
+    fun diagnose(what: String): JSONObject = json("$base/api/diagnose", JSONObject().put("what", what).toString(), timeoutMs = 120_000)
     /** "Reconectar": [what] is "camera" or "ai". Returns the connection as it is after. */
     fun reconnect(what: String): JSONObject = json("$base/api/connection", JSONObject().put("reconnect", what).toString())
 

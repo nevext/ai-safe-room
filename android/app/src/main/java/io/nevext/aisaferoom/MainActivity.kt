@@ -51,6 +51,9 @@ sealed interface Screen {
     data object Zones : Screen
     data object People : Screen
     data object Enroll : Screen
+    data object Ai : Screen
+    data object Diagnostics : Screen
+    data object Summaries : Screen
     data class Soon(val title: String) : Screen
 }
 
@@ -74,6 +77,8 @@ class Live {
     val twoLenses: Boolean get() = info?.optJSONObject("lenses")?.optInt("count") == 2
     val protectionOn: Boolean get() = info?.optJSONObject("protection")?.optBoolean("on") == true
     val privacyOn: Boolean get() = info?.optJSONObject("privacy")?.optBoolean("on") == true
+    /** The AI is the person's choice (off by default): off, the video comes straight from the camera. */
+    val aiOn: Boolean get() = info?.optJSONObject("ai")?.optBoolean("enabled") == true
     var seenAt by mutableStateOf(0L)   // activities after this are new (the number on the Atividades tab)
     val unseen: Int get() = (0 until activity.length()).mapNotNull { activity.optJSONObject(it) }
         .count { it.optString("type") in setOf("person", "animal") && it.optLong("at") > seenAt }
@@ -243,9 +248,9 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 when (s) {
                     Screen.Home -> HomeScreen(live, visible, onCamera = { open(Screen.Camera) }, onSystem = { open(Screen.System) },
                         onActivity = { tab = Screen.Activity; screen = Screen.Activity }, onFullscreen = { fullscreen = "whole" },
-                        onProtection = { open(Screen.Protection) })
+                        onProtection = { open(Screen.Protection) }, onAi = { open(Screen.Ai) })
                     Screen.Cameras -> CamerasScreen(live, onCamera = { open(Screen.Camera) }, onAdd = { open(Screen.Find) })
-                    Screen.Activity -> ActivityScreen(live, onLive = { open(Screen.Camera) })
+                    Screen.Activity -> ActivityScreen(live, onLive = { open(Screen.Camera) }, onSummaries = { open(Screen.Summaries) })
                     else -> SettingsScreen(onOpen = open)
                 }
             }
@@ -267,6 +272,18 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 PeopleScreen(live, onBack = back, onEnroll = { screen = Screen.Enroll })
             }
             Screen.Enroll -> if (h != null) EnrollScreen(live, visible, onBack = { screen = Screen.People })
+            Screen.Ai -> if (h != null) {
+                BackHandler(onBack = back)
+                AiScreen(live, onBack = back, onPeople = { open(Screen.People) }, onZones = { open(Screen.Zones) })
+            }
+            Screen.Diagnostics -> if (h != null) {
+                BackHandler(onBack = back)
+                DiagnosticsScreen(live, onBack = back)
+            }
+            Screen.Summaries -> if (h != null) {
+                BackHandler(onBack = back)
+                SummariesScreen(live, prefs, onBack = back)
+            }
             Screen.Protection -> if (h != null) {
                 BackHandler(onBack = back)
                 ProtectionScreen(live, prefs, onBack = back)

@@ -92,6 +92,15 @@ const PROFILE = (() => {
 const COMMON_CREDS = PROFILE.credentials || [['admin', ''], ['admin', 'admin'], ['admin', '123456'], ['admin', 'tlJwpbo6']];
 
 const cam = { addr: null, user: 'admin', pass: '', onvif: null, dvr: null, ptzDir: null, profiles: [], info: {}, snapUri: null, streamUri: null, videoSource: 'V_SRC_000' };
+// A IA (camera-ai) é escolha da pessoa, como na TV: vem desligada e a câmera funciona normal, direto. Ligada, cada
+// recurso (atividades de pessoa e animal, seguir, rostos) também é escolhido. Quem já usava o seguir antes desta
+// chave existir tinha escolhido a IA.
+const aiSettings = (() => {
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8'));
+    return st.aiSettings ? { enabled: false, detect: false, ...st.aiSettings } : { enabled: !!st.follow, detect: !!st.follow };
+  } catch { return { enabled: false, detect: false }; }
+})();
 const follow = { wanted: (() => { try { return !!JSON.parse(fs.readFileSync(path.join(HERE, 'state.json'), 'utf8')).follow; } catch { return false; } })(),
   enabled: false, lastMove: 0, lostAt: 0, returned: false, hitFrames: 0, timer: null };
 
@@ -508,10 +517,11 @@ function resumeFollow() {
   if (privacy.on) return;
   if (follow.wanted && !follow.enabled && setFollow(true).enabled) console.log('Seguir pessoa: ligado (estava ligado antes)');
   if (clipsOn.wanted) startAi();   // os clipes também precisam da IA olhando
+  if (aiSettings.enabled && aiSettings.detect) startAi();   // as atividades: a IA olha mesmo sem ninguém assistindo
 }
 function setFollow(enabled) {
   if (follow.wanted !== !!enabled) { follow.wanted = !!enabled; saveState(); }   // lembrado: volta ligado se o camera-ai reiniciar
-  follow.enabled = !!enabled && !!cam.dvr && !!ai.model && !!live;
+  follow.enabled = !!enabled && aiSettings.enabled && !!cam.dvr && !!ai.model && !!live;
   follow.lastMove = 0; follow.lostAt = 0; follow.returned = false; follow.hitFrames = 0;
   clearTimeout(follow.timer); follow.timer = null;
   if (!follow.enabled && cam.ptzDir) ptz('left', 'stop').catch(() => {});
@@ -520,11 +530,11 @@ function setFollow(enabled) {
 }
 function startAi() {
   clearTimeout(ai.idle);
-  if (ai.stop || !ai.model || !live || directWatch.on || privacy.on) return;
+  if (ai.stop || !ai.model || !live || directWatch.on || privacy.on || !aiSettings.enabled) return;
   const analyze = analyzer({ model: ai.model, onResult: r => {
     r = ignoreZones(r);
-    ai.last = r; ai.count++; ai.lastAt = Date.now(); updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
-    arrivals(r);
+    ai.last = r; ai.count++; ai.total = (ai.total || 0) + 1; ai.lastAt = Date.now(); updateFollow(r); if (clipsOn.wanted) clips?.seen(r); broadcast({ type: 'detections', ...r });
+    if (aiSettings.detect) arrivals(r);
   } });
   // O quadro que a IA olha fica guardado: a miniatura de uma pessoa sai dele, do mesmo instante (o snapshot da
   // câmera demora ~7 s e já mostrava outra coisa)
@@ -620,9 +630,112 @@ async function reconnect(what) {
   return connectionInfo();
 }
 
+// ---------- A IA: ligar, os recursos e o rigor (GET/POST /api/ai) ----------
+function aiInfo() {
+  return { ok: true, available: !!ai.model, model: ai.model?.name || null, device: ai.model?.device || null,
+    enabled: aiSettings.enabled, detect: aiSettings.detect, follow: follow.wanted, rigor: rigor(),
+    faces: !!faces, people: people.list().length };
+}
+function setAi(b) {
+  if (b.enabled != null) aiSettings.enabled = !!b.enabled;
+  if (b.detect != null) aiSettings.detect = !!b.detect;
+  if (b.rigor && RIGOR[b.rigor] && perfil) { perfil.data.rigor = b.rigor; perfil.save(); }
+  saveState();
+  if (!aiSettings.enabled) {
+    if (follow.enabled) setFollow(false); else follow.wanted = false;
+    if (ai.stop) { ai.stop(); ai.stop = null; }
+    saveState();
+  } else if (aiSettings.detect) startAi();
+  else stopAiSoon();
+  if (b.follow != null) setFollow(!!b.follow);
+  syncFaces();
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} IA: ${aiSettings.enabled ? `ligada (atividades ${aiSettings.detect ? 'sim' : 'não'}, seguir ${follow.wanted ? 'sim' : 'não'}, rigor ${rigor()})` : 'desligada (câmera normal)'}`);
+  return aiInfo();
+}
+
+// ---------- Resumo de cada dia (GET /api/summaries): o histórico dos últimos 30 dias ----------
+function summaries() {
+  const days = new Map();
+  for (const a of activity) {
+    const d = new Date(a.at);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    let s = days.get(key);
+    if (!s) days.set(key, s = { day: key, at: new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(), visits: 0, people: 0,
+      names: new Set(), unknown: 0, animals: 0, motions: 0, alerts: 0, first: null, last: null });
+    if (a.type === 'person') {
+      s.visits++; s.people = Math.max(s.people, a.people || 1);
+      for (const n of a.names || []) s.names.add(n);
+      if (isUnknown(a)) s.unknown++;
+      s.first ??= a.at; s.last = a.until || a.at;
+    } else if (a.type === 'animal') s.animals++;
+    else if (a.type === 'motion') s.motions += a.count || 1;
+    if (a.alert) s.alerts++;
+  }
+  return [...days.values()].sort((a, b) => b.at - a.at).slice(0, 30).map(s => ({ ...s, names: [...s.names] }));
+}
+
+// ---------- Diagnóstico (POST /api/diagnose): a câmera, o Wi-Fi até ela, e ela até a IA ----------
+function pingMany(n) {
+  if (!cam.addr) return Promise.resolve([]);
+  const args = process.platform === 'win32' ? ['-n', String(n), '-w', '1000', cam.addr] : ['-c', String(n), '-W', '1', '-i', '0.5', cam.addr];
+  return new Promise(ok => {
+    let out = '';
+    const p = spawn('ping', args);
+    p.stdout.on('data', d => out += d);
+    p.on('error', () => ok([]));
+    p.on('close', () => {
+      const times = [...out.matchAll(/(?:time|tempo)[=<]\s*([\d.,]+)\s*ms/gi)].map(m => Math.max(1, Math.round(parseFloat(m[1].replace(',', '.')))));
+      ok([...times, ...Array(Math.max(0, n - times.length)).fill(null)]);
+    });
+  });
+}
+async function diagnose(what) {
+  const result = (grade, lines, tips = []) => ({ ok: true, what, grade, label: grade == null ? null : GRADES[grade], lines, tips, at: Date.now() });
+  if (what === 'camera') {
+    const v = await runFullVistoria();
+    if (!v.ok) return { ok: false, error: v.error || 'a vistoria não rodou' };
+    const results = v.results || [];
+    const okCount = results.filter(r => r.status === 'ok').length;
+    return result(null, results.map(r => `${r.status === 'ok' ? '✓' : r.status === 'no' ? '✗' : '•'} ${CAP_LABELS[r.id]?.pt || r.id}: ${r.how || r.status}`),
+      [`${okCount} de ${results.length} recursos conferidos de verdade.`]);
+  }
+  if (what === 'wifi') {
+    const times = await pingMany(10);
+    const got = times.filter(t => t != null), lost = times.length - got.length;
+    if (!got.length) return result(0, ['A câmera não respondeu a nenhuma das 10 tentativas.'], ['Veja se a câmera está ligada e no Wi-Fi.']);
+    const avg = Math.round(got.reduce((a, b) => a + b, 0) / got.length), max = Math.max(...got);
+    const jitter = Math.round(got.slice(1).reduce((n, t, i) => n + Math.abs(t - got[i]), 0) / Math.max(1, got.length - 1));
+    const v = live?.active ? meter.summary() : null;
+    const drops = meter.drops();
+    const g = lost >= 3 || avg > 100 || drops >= 6 ? 0 : lost || avg > 40 || jitter > 40 || v?.stalls || drops >= 2 ? 1 : avg > 10 || drops ? 2 : 3;
+    const lines = [`Resposta média ${avg} ms (a pior ${max} ms)`, `Variação ${jitter} ms`, `${lost ? `Perdeu ${lost} de 10` : 'Nenhuma perdida'} (10 tentativas)`,
+      `${drops ? `${drops} ${drops === 1 ? 'queda' : 'quedas'}` : 'Nenhuma queda'} do vídeo na última hora`];
+    if (v) lines.push(`Vídeo chegando: ${Math.round(v.fps)} quadros/s, ${v.stalls ? `${v.stalls} travadas` : 'sem travar'}`);
+    const tips = g <= 1 ? ['O Wi-Fi da câmera está fraco: aproxime o roteador, tire obstáculos do caminho ou ponha um repetidor perto dela.'] : [];
+    return result(g, lines, tips);
+  }
+  if (what === 'ai') {
+    if (!ai.model) return result(null, ['A IA não está instalada no computador.']);
+    if (!aiSettings.enabled) return result(null, ['A IA está desligada: a câmera funciona normal, sem IA.'], ['Ligue em Ajustes → Inteligência (IA).']);
+    if (!ai.stop) startAi();
+    const c0 = ai.total || 0, t0 = Date.now();
+    await new Promise(r => setTimeout(r, 8000));   // 8 s olhando quantas análises saem
+    const rate = ((ai.total || 0) - c0) / ((Date.now() - t0) / 1000);
+    const fps = live?.stats().whole?.fps || 0;
+    const g = rate < 1 || fps < 2 ? 0 : rate < 2 || fps < 8 ? 1 : rate < 4 || fps < 12 ? 2 : 3;
+    const lines = [`${rate.toFixed(1).replace('.', ',')} análises por segundo`, `Vídeo chegando à IA: ${fps} quadros/s`,
+      `Modelo ${ai.model.name}, ${ai.model.device === 'gpu' ? 'na placa de vídeo' : 'no processador'}`, `Rigor: ${rigor()}`];
+    const tips = [];
+    if (fps < 8) tips.push('Pouco vídeo chegando: veja o diagnóstico do Wi-Fi da câmera.');
+    if (rate < 2 && fps >= 8) tips.push('O computador está lento para a IA: feche programas pesados.');
+    return result(g, lines, tips);
+  }
+  return { ok: false, error: 'diagnóstico de quê?' };
+}
+
 function stopAiSoon() {
   clearTimeout(ai.idle);
-  ai.idle = setTimeout(() => { if (!ai.listeners.size && !follow.enabled && !clipsOn.wanted && ai.stop) { ai.stop(); ai.stop = null; } }, 10000);
+  ai.idle = setTimeout(() => { if (!ai.listeners.size && !follow.enabled && !clipsOn.wanted && !(aiSettings.enabled && aiSettings.detect) && ai.stop) { ai.stop(); ai.stop = null; } }, 10000);
 }
 function broadcast(event) {
   const line = JSON.stringify(event) + '\n';
@@ -743,7 +856,7 @@ async function screenControls() {
   return [
     ...(night == null ? [] : [{ id: 'night', type: 'toggle', label: L('Visão noturna', 'Night vision'), value: night }]),
     ...(light == null ? [] : [{ id: 'light', type: 'toggle', label: L('Luz branca', 'White light'), value: light }]),
-    ...(PROFILE.ptz?.personFollow && perfil?.has('motor') !== false ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
+    ...(aiSettings.enabled && PROFILE.ptz?.personFollow && perfil?.has('motor') !== false ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
   ];
 }
 
@@ -980,16 +1093,20 @@ setInterval(() => {
 // Só conta o que a IA viu na maioria das últimas análises (~1 s), não uma imagem solta.
 const VISIT_GAP = 10 * 60e3;
 const presence = { person: { recent: [], lastSeen: 0, visit: null, savedAt: 0 }, animal: { recent: [], lastSeen: 0, visit: null, savedAt: 0 } };
-const RULES = {
-  person: { min: 0.6, of10: 6 },
+// O rigor (escolhido no app): anotar só quando tem certeza, o meio-termo, ou sempre que suspeitar. min é a nota da
+// IA; of10, em quantas das últimas 10 análises (~1 s) ela viu.
+const RIGOR = {
+  certeza: { person: { min: 0.7, of10: 8 }, animal: { min: 0.85, of10: 9, minArea: 0.006 } },
   // Animal pede muito mais: um cobertor e uma sombra viraram "Cachorro" com nota 0,5–0,7 (25/10)
-  animal: { min: 0.8, of10: 8, minArea: 0.004 },
+  equilibrado: { person: { min: 0.6, of10: 6 }, animal: { min: 0.8, of10: 8, minArea: 0.004 } },
+  suspeita: { person: { min: 0.4, of10: 3 }, animal: { min: 0.6, of10: 5, minArea: 0.003 } },
 };
+const rigor = () => RIGOR[perfil?.data.rigor] ? perfil.data.rigor : 'equilibrado';
 function arrivals(r) {
   const now = Date.now(), where = perfil?.data.name || 'Câmera';
   for (const kind of ['person', 'animal']) {
     if (kind === 'animal' && perfil?.data.pets === false) continue;   // "não tem animais em casa"
-    const p = presence[kind], rule = RULES[kind];
+    const p = presence[kind], rule = RIGOR[rigor()][kind];
     const found = (r.items || []).filter(it => it.kind === kind && it.score >= rule.min && !it.uncertain
       && (!rule.minArea || it.box[2] * it.box[3] >= rule.minArea)).sort((a, b) => b.score - a.score);
     p.recent.push(found.length > 0);
@@ -1190,7 +1307,7 @@ async function onHires(rgb, w, h) {
   finally { facesBusy = false; }
 }
 function syncFaces() {
-  const want = !!faces && (!!(enroll && !enroll.done) || people.list().length > 0);
+  const want = !!faces && aiSettings.enabled && (!!(enroll && !enroll.done) || people.list().length > 0);
   if (want && !stopHires && live) stopHires = live.onHires(onHires);
   if (!want && stopHires) { stopHires(); stopHires = null; }
   setTimeout(applyVideoPick, 0);
@@ -1624,7 +1741,7 @@ async function screenInfo() {
     lenses: PROFILE.lenses || null,
     video: HAS_FFMPEG ? { mjpeg: '/api/screen/video', formats: live ? ['ts', 'mjpeg'] : H264 ? ['h264', 'mjpeg'] : ['mjpeg'],
       views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'] } : null,
-    ai: { status: ai.status, model: ai.model?.name || null, device: ai.model?.device || null, events: '/api/screen/events' },
+    ai: { status: ai.status, enabled: aiSettings.enabled, model: ai.model?.name || null, device: ai.model?.device || null, events: '/api/screen/events' },
     audio: live && PROFILE.audio?.microphone !== false ? { pcm: '/api/screen/audio', rate: 8000, channels: 1 } : null,
     controls: await screenControls().catch(() => []),
     motion: { active: motionWatch.active, last: motion.last },
@@ -1834,7 +1951,7 @@ f.onsubmit=async ev=>{ev.preventDefault();const r=await fetch('/api/login',{meth
 const d=await r.json().catch(()=>({}));if(d.ok)location.reload();else e.textContent=d.error||'não deu';};</script></body></html>`;
 
 function saveState() {
-  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, clips: clipsOn.wanted, video: videoPick.choice, access, protection, privacy })); } catch {}
+  try { fs.writeFileSync(STATE_FILE, JSON.stringify({ addr: cam.addr, user: cam.user, pass: cam.pass, dayNight, follow: follow.wanted, aiSettings, clips: clipsOn.wanted, video: videoPick.choice, access, protection, privacy })); } catch {}
 }
 setImmediate(saveState);   // a senha nova (primeira vez) fica guardada já, depois que tudo acima e abaixo existe
 
@@ -1988,6 +2105,15 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, perfilInfo());
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
+      case '/api/ai': return json(res, 200, req.method === 'POST' ? setAi(await readBody(req)) : aiInfo());
+      case '/api/summaries': return json(res, 200, { ok: true, days: summaries() });
+      case '/api/diagnose': return json(res, 200, await diagnose((await readBody(req)).what));
+      case '/api/screen/direct-stream': {
+        // O app vendo direto da câmera (sem IA): o endereço com usuário e senha, só para aparelhos com acesso
+        const m = mainProfile(), sub = subProfile();
+        if (!m?.rtsp) return json(res, 503, { error: 'a câmera não está conectada' });
+        return json(res, 200, { ok: true, main: m.rtsp, sub: sub?.rtsp || m.rtsp, width: m.width, height: m.height, layout: PROFILE.lenses?.layout || null });
+      }
       case '/api/connection': return json(res, 200, req.method === 'POST' ? await reconnect((await readBody(req)).reconnect) : connectionInfo());
       case '/api/activity/forget': { const b = await readBody(req); return json(res, 200, forgetActivity(b.at, b.type)); }
       case '/api/activity/who': return json(res, 200, await whoIs(await readBody(req)));

@@ -45,6 +45,12 @@ loja, quem faz cada parte e as decisões tomadas.
        (exigido de conta pessoal nova).
 5. [ ] (Opcional, já) conta na **Tuya** em iot.tuya.com.
 
+## Ideia: configurar câmera nova pelo AI Safe Room
+
+Quem comprou a câmera baixa o AI Safe Room para pôr ela no Wi-Fi (de graça), em vez do app da marca. É a porta de
+entrada: o app já está na casa no primeiro dia e a IA fica a um toque. Cada marca põe a câmera no Wi-Fi de um jeito
+(QR code que a câmera lê, ponto de acesso, som): vem junto com a nuvem de cada marca, XM primeiro, depois Tuya.
+
 ## O que eu (Claude) faço
 
 1. [ ] **Servidor com contas**: Postgres, criar conta e entrar no app, família compartilhada (no lugar das chaves por

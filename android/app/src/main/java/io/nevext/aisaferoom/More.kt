@@ -135,10 +135,6 @@ fun ProtectionScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
                     ask.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else setNotify(on)
             }
-            SwitchRow(Icons.Outlined.Summarize, "Resumo do dia", "Às 21h: quantas pessoas, animais e movimentos", summary) { on ->
-                summary = on
-                prefs.edit().putBoolean("summary", on).apply()
-            }
         }
         Text("Os avisos chegam pelo Wi-Fi de casa ou, fora dela, pelo endereço de fora em Ajustes → Conexão.",
             color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))

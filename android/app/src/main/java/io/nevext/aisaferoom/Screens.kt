@@ -33,6 +33,8 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.DirectionsWalk
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Devices
@@ -180,6 +182,13 @@ internal fun whenText(at: Long): String {
  */
 @Composable
 private fun LiveVideo(live: Live, view: String, visible: Boolean, modifier: Modifier = Modifier, fit: Boolean = false) {
+    if (!live.aiOn) return DirectVideo(live, view, visible, modifier, fit)
+    AiVideo(live, view, visible, modifier, fit)
+}
+
+/** Through camera-ai (with the AI on): the video with what the AI sees drawn on it. */
+@Composable
+private fun AiVideo(live: Live, view: String, visible: Boolean, modifier: Modifier, fit: Boolean) {
     val hub = live.hub ?: return
     var frame by remember(view) { mutableStateOf<ImageBitmap?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -285,9 +294,15 @@ fun Tabs(current: Screen, unseen: Int, onTab: (Screen) -> Unit, content: @Compos
 
 @Composable
 fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () -> Unit, onActivity: () -> Unit, onFullscreen: () -> Unit,
-               onProtection: () -> Unit) {
+               onProtection: () -> Unit, onAi: () -> Unit) {
     val hub = live.hub ?: return
     val scope = rememberCoroutineScope()
+    var askAi by remember { mutableStateOf(false) }
+    if (askAi) androidx.compose.material3.AlertDialog(onDismissRequest = { askAi = false },
+        title = { Text("A Proteção usa a IA") },
+        text = { Text("Para avisar quando aparecer alguém, o computador precisa olhar a câmera e saber que é uma pessoa. Ligue a IA primeiro.") },
+        confirmButton = { Button(onClick = { askAi = false; onAi() }, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Ver a IA") } },
+        dismissButton = { TextButton(onClick = { askAi = false }) { Text("Agora não", color = palette.muted) } })
     Page {
         Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Logo(29.dp)
@@ -335,6 +350,7 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ModeCard(Icons.Outlined.Shield, "Proteção", if (live.protectionOn) "Ativada" else "Desativada", live.protectionOn,
                 Modifier.weight(1f), onLongClick = onProtection) { on ->
+                if (on && !live.aiOn) { askAi = true; return@ModeCard }
                 scope.launch {
                     withContext(Dispatchers.IO) { runCatching { hub.setProtection(on); hub.screen() } }
                         .onSuccess { live.info = it }.onFailure { live.problem = "Não deu: ${it.message}" }
@@ -348,8 +364,6 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
                 }
             }
         }
-        Text("Proteção: avisa no celular quando aparecer alguém. Privacidade: a câmera cobre a imagem e não guarda nada.",
-            color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
         Spacer(Modifier.height(20.dp))
     }
 }
@@ -516,7 +530,7 @@ private fun dayTitle(at: Long): String {
 }
 
 @Composable
-fun ActivityScreen(live: Live, onLive: () -> Unit) {
+fun ActivityScreen(live: Live, onLive: () -> Unit, onSummaries: () -> Unit) {
     val hub = live.hub ?: return
     var filter by remember { mutableStateOf(0) }
     // What's open is looked up again in the list: when the visit changes (a name, "Quem é?"), the detail follows
@@ -528,7 +542,7 @@ fun ActivityScreen(live: Live, onLive: () -> Unit) {
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 20.dp)) {
         item {
             PageTitle("Atividades", "Histórico de eventos e detecções")
-            DaySummary(today)
+            DaySummary(today, onSummaries)
             Row(Modifier.padding(top = 14.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FILTERS.forEachIndexed { i, (label, _) ->
                     val on = i == filter
@@ -580,14 +594,17 @@ fun ActivityScreen(live: Live, onLive: () -> Unit) {
 
 /** Today in one line and a strip of the day (0h to 24h) with a dot where something happened. */
 @Composable
-private fun DaySummary(today: List<JSONObject>) {
+private fun DaySummary(today: List<JSONObject>, onOpen: () -> Unit) {
     // Pessoas: quantas apareceram juntas no máximo (a IA não sabe quem é quem, mas sabe contar quantas vê ao mesmo tempo)
     val visits = today.filter { it.optString("type") == "person" }
     val people = visits.maxOfOrNull { it.optInt("people", 1) } ?: 0
     val animals = today.count { it.optString("type") == "animal" }
     val moves = today.filter { it.optString("type") == "motion" }.sumOf { it.optInt("count", 1) }
-    Column(Modifier.fillMaxWidth().card(palette).padding(16.dp)) {
-        Text("Hoje", fontSize = 12.sp, color = palette.muted)
+    Column(Modifier.fillMaxWidth().card(palette).clickable(onClick = onOpen).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Hoje", fontSize = 12.sp, color = palette.muted, modifier = Modifier.weight(1f))
+            Text("Outros dias ›", fontSize = 12.sp, color = Blue, fontWeight = FontWeight.SemiBold)
+        }
         Text(listOfNotNull(
             if (people == 0) "Ninguém" else "$people ${if (people == 1) "pessoa" else "pessoas"}",
             animals.takeIf { it > 0 }?.let { "$it ${if (it == 1) "animal" else "animais"}" },
@@ -712,7 +729,8 @@ fun SettingsScreen(onOpen: (Screen) -> Unit) {
         PageTitle("Ajustes", "Personalize e gerencie seu sistema")
         Column(Modifier.fillMaxWidth().card(palette)) {
             ListRow(Icons.Outlined.Videocam, "Câmeras", "Nome, recursos, zonas e vistoria", onClick = { onOpen(Screen.Features) })
-            ListRow(Icons.Outlined.Notifications, "Proteção e avisos", "Avisos no celular, horário, resumo do dia", onClick = { onOpen(Screen.Protection) })
+            ListRow(Icons.Outlined.AutoAwesome, "Inteligência (IA)", "Ligar a IA, os recursos e o rigor", onClick = { onOpen(Screen.Ai) })
+            ListRow(Icons.Outlined.Notifications, "Proteção e avisos", "Avisos no celular e horário", onClick = { onOpen(Screen.Protection) })
             ListRow(Icons.Outlined.Face, "Pessoas conhecidas", "Reconhecer as pessoas da casa pelo rosto", onClick = { onOpen(Screen.People) })
             ListRow(Icons.Outlined.Group, "Família e aparelhos", "Quem tem acesso às câmeras", onClick = { onOpen(Screen.Family) })
             ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Soon("Armazenamento")) })
@@ -721,7 +739,8 @@ fun SettingsScreen(onOpen: (Screen) -> Unit) {
         Column(Modifier.fillMaxWidth().card(palette)) {
             ListRow(Icons.Outlined.Palette, "Aparência", "Tema claro/escuro", onClick = { onOpen(Screen.Appearance) })
             ListRow(Icons.Outlined.Lock, "Privacidade", "Dados e permissões", onClick = { onOpen(Screen.Privacy) })
-            ListRow(Icons.Outlined.Wifi, "Conexão", "Status, e ver de fora de casa", onClick = { onOpen(Screen.System) })
+            ListRow(Icons.Outlined.Wifi, "Conexão", "Status, reconectar e ver de fora de casa", onClick = { onOpen(Screen.System) })
+            ListRow(Icons.Outlined.MonitorHeart, "Diagnóstico", "Testar a câmera, o Wi-Fi dela e a IA", onClick = { onOpen(Screen.Diagnostics) })
         }
         Spacer(Modifier.height(20.dp))
     }
