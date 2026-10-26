@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -85,14 +86,17 @@ object SharedVideo {
     private var url: String? = null
     private var users = 0
     var aspect = 1.5f; private set
+    /** What's playing now: a screen that opens picks it up at once, without asking anything. */
+    val current: String? get() = url
+    /** The last picture the previous screen showed: the next one shows it until its first frame (no black flash). */
+    var lastFrame: androidx.compose.ui.graphics.ImageBitmap? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val releaseLater = Runnable { if (users == 0) reset() }
 
     fun acquire(context: android.content.Context, u: String): ExoPlayer {
         handler.removeCallbacks(releaseLater)
         users++
-        player?.takeIf { url == u }?.let { android.util.Log.i("SharedVideo", "reuse users=$users"); return it }
-        android.util.Log.i("SharedVideo", "new (had ${url?.takeLast(30)}) -> ${u.takeLast(30)} users=$users")
+        player?.takeIf { url == u }?.let { return it }
         reset()
         url = u
         // Little reserve to start (live, not 8 s behind); waits 15 s for the camera before giving up (a Wi-Fi burst
@@ -113,7 +117,7 @@ object SharedVideo {
         users = (users - 1).coerceAtLeast(0)
         if (users == 0) { handler.removeCallbacks(releaseLater); handler.postDelayed(releaseLater, 4000) }
     }
-    fun reset() { if (player != null) android.util.Log.i("SharedVideo", "reset users=$users"); player?.release(); player = null; url = null }
+    fun reset() { player?.release(); player = null; url = null }
 }
 
 /**
@@ -138,8 +142,9 @@ fun decodesBig(width: Int, height: Int): Boolean = runCatching {
 fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier = Modifier, fit: Boolean = false, onGiveUp: () -> Unit = {}) {
     val hub = live.hub ?: return
     val context = LocalContext.current
-    var url by remember(hub) { mutableStateOf<String?>(null) }
+    var url by remember(hub) { mutableStateOf(SharedVideo.current) }
     var playing by remember { mutableStateOf(false) }
+    var drawn by remember { mutableStateOf(false) }   // this screen's own picture already showed its first frame
     var failed by remember { mutableStateOf(false) }
     var attempt by remember { mutableIntStateOf(0) }
     var aspect by remember { mutableStateOf(1.5f) }
@@ -180,11 +185,12 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
             }
             override fun onPlayerError(error: PlaybackException) { playing = false; failed = true; url = null }   // the password may have changed
             override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
+            override fun onRenderedFirstFrame() { drawn = true }
         }
         p.addListener(listener)
         onDispose {
             p.removeListener(listener)
-            texture?.let { p.clearVideoTextureView(it) }
+            texture?.let { t -> runCatching { t.bitmap?.asImageBitmap() }.getOrNull()?.let { SharedVideo.lastFrame = it }; p.clearVideoTextureView(t) }
             SharedVideo.leave()
             playing = false
         }
@@ -224,6 +230,10 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         val dy = when (view) { "top" -> (fullH - rh) / 2; "bottom" -> -(fullH - rh) / 2; else -> 0.dp }
         if (player != null) AndroidView(factory = { TextureView(it).also { t -> texture = t } }, update = { player.setVideoTextureView(it) },
             modifier = Modifier.requiredSize(rw, fullH).offset(y = dy))
+        // Changing screens: the last picture stays until this screen's first frame, instead of black
+        if (playing && !drawn) SharedVideo.lastFrame?.let {
+            Image(it, null, contentScale = ContentScale.FillBounds, modifier = Modifier.requiredSize(rw, fullH).offset(y = dy))
+        }
         if (!playing) {
             rememberPicture(hub, hub.thumbUrl)?.let {
                 Image(it, null, contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.6f)
