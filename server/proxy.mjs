@@ -146,6 +146,7 @@ async function connect(addr, user, pass) {
     if (info.ok && /Manufacturer/i.test(info.text)) {
       cam.user = u; cam.pass = p;
       cam.dvr?.close(); cam.dvr = await dvrip(addr, u, p).catch(e => { console.log('DVRIP indisponível:', e.message); return null; });
+      if (cam.dvr) watchAlarms(cam.dvr);
       cam.info = {
         manufacturer: tag(info.text, 'Manufacturer'), model: tag(info.text, 'Model'),
         firmware: tag(info.text, 'FirmwareVersion'), serial: tag(info.text, 'SerialNumber'),
@@ -222,7 +223,7 @@ const publicState = () => ({
 
 // ---------- HTTP Digest (para snapshot JPEG) ----------
 async function httpGetDigest(uri) {
-  const fetch = (u, o = {}) => globalThis.fetch(u, { ...o, signal: AbortSignal.timeout(8000) });   // câmera sumida: desiste
+  const fetch = (u, o = {}) => globalThis.fetch(u, { ...o, signal: AbortSignal.timeout(20000) });   // câmera sumida: desiste (a foto leva 5–8 s; na vistoria, mais)
   let r = await fetch(uri);
   if (r.status === 401) {
     const wa = r.headers.get('www-authenticate') || '';
@@ -253,7 +254,7 @@ function ffmpegFrame(rtsp) {
     const ff = spawn(FFMPEG, ['-loglevel', 'error', '-rtsp_transport', 'tcp', '-timeout', '5000000', '-i', rtsp, '-frames:v', '1', '-f', 'image2', '-']);
     const chunks = []; ff.stdout.on('data', d => chunks.push(d));
     const giveUp = setTimeout(() => ff.kill('SIGKILL'), 10000);   // nunca fica pendurado na câmera
-    ff.on('close', c => { clearTimeout(giveUp); c === 0 ? ok(Buffer.concat(chunks)) : err(new Error('ffmpeg frame ' + c)); });
+    ff.on('close', c => { clearTimeout(giveUp); c === 0 ? ok(Buffer.concat(chunks)) : err(new Error(c === null ? 'a câmera não mandou a imagem a tempo (o vídeo dela pode estar ocupado por outra tela)' : 'ffmpeg frame ' + c)); });
     ff.on('error', err);
   });
 }
@@ -265,7 +266,7 @@ async function dvrSession() {
   if (!cam.dvr) throw new Error('Controle pelo DVRIP indisponível');
   if (!cam.dvr.closed) return cam.dvr;
   dvrLogin ??= dvrip(cam.addr, cam.user, cam.pass)
-    .then(d => { console.log(`${new Date().toLocaleTimeString('pt-BR')} DVRIP: sessão refeita`); return cam.dvr = d; })
+    .then(d => { console.log(`${new Date().toLocaleTimeString('pt-BR')} DVRIP: sessão refeita`); watchAlarms(d); return cam.dvr = d; })
     .finally(() => { dvrLogin = null; });
   return dvrLogin;
 }
@@ -630,6 +631,123 @@ async function reconnect(what) {
   return connectionInfo();
 }
 
+// ---------- O que a câmera faz sozinha, sem a IA ----------
+// Os avisos da própria câmera pelo DVRIP (1504): movimento e, nas que têm, pessoa (a detecção dela, sem a nossa IA
+// nem vídeo saindo da câmera). O formato do aviso de pessoa ainda é anotado no log até ser conferido.
+const camPerson = { visit: null, lastAt: 0 };
+let cameraPersonOn = false;   // a detecção de pessoa da câmera está ligada (a Proteção funciona sem a IA)
+setInterval(() => { if (cam.dvr) camConfig('Detect.HumanDetection.[0]').then(c => { cameraPersonOn = !!c?.Enable; }).catch(() => {}); }, 60000).unref();
+function watchAlarms(d) {
+  d.request(1500, { Name: '' }).catch(() => {});
+  d.request(1042, { Name: 'Detect.HumanDetection.[0]' }).then(r => { cameraPersonOn = !!r['Detect.HumanDetection.[0]']?.Enable; }).catch(() => {});
+  d.on((id, msg) => {
+    if (id !== 1504 || !msg || Buffer.isBuffer(msg)) return;
+    const info = msg.AlarmInfo || msg;
+    const event = String(info.Event || ''), start = String(info.Status || '').toLowerCase() === 'start';
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Aviso da câmera: ${event} ${info.Status || ''}`);
+    if (!start || !/human|ped|person|people|body/i.test(event)) return;
+    if (perfil && perfil.status('camPerson') !== 'ok') { perfil.verify('camPerson', 'ok', `a câmera avisou pessoa (${event})`); perfil.save(); }
+    if (aiSettings.enabled && aiSettings.detect) return;   // com a IA, quem anota é ela
+    const now = Date.now(), v = camPerson.visit;
+    if (v && now - camPerson.lastAt < VISIT_GAP) { v.until = now; saveActivity(); broadcast({ type: 'activity', update: true, item: v }); }
+    else logActivity('person', `Pessoa no ${perfil?.data.name || 'Câmera'}`, { thumb: true, label: 'Pessoa', people: 1 })
+      .then(e => { camPerson.visit = e || null; if (e) e.byCamera = true; });
+    camPerson.lastAt = now;
+  });
+}
+
+// Recursos da câmera (Detect.HumanDetection, Detect.DetectTrack, StorageInfo): ler e mudar
+async function camConfig(name) { return (await (await dvrSession()).request(1042, { Name: name }))[name]; }
+async function setCamConfig(name, value) {
+  const r = await (await dvrSession()).request(1040, { Name: name, [name]: value });
+  if (r.Ret !== 100 && r.Ret !== 603) throw new Error(`a câmera recusou (${r.Ret})`);
+}
+async function cameraOwn() {
+  if (!cam.dvr) return null;
+  const out = {};
+  try { out.person = cameraPersonOn = !!(await camConfig('Detect.HumanDetection.[0]'))?.Enable; } catch {}
+  try { const t = await camConfig('Detect.DetectTrack'); if (t) out.track = !!t.Enable; } catch {}
+  try {
+    const s = (await (await dvrSession()).request(1020, { Name: 'StorageInfo' })).StorageInfo || [];
+    const total = s.flatMap(d => d.Partition || []).reduce((n, x) => n + parseInt(x.TotalSpace || '0', 16), 0);
+    out.sd = total > 0 ? { mb: total } : null;
+  } catch {}
+  return out;
+}
+async function setCameraOwn(b) {
+  if (b.person != null) { const c = await camConfig('Detect.HumanDetection.[0]'); await setCamConfig('Detect.HumanDetection.[0]', { ...c, Enable: !!b.person }); cameraPersonOn = !!b.person; }
+  if (b.track != null) {
+    // O seguir de fábrica e o nosso brigariam pelo motor: um de cada vez
+    if (b.track && follow.enabled) setFollow(false);
+    const c = await camConfig('Detect.DetectTrack'); await setCamConfig('Detect.DetectTrack', { ...c, Enable: b.track ? 1 : 0 });
+  }
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Câmera: ${JSON.stringify(b)}`);
+  return { ok: true, ...(await cameraOwn()) };
+}
+// Relógio e reiniciar
+async function syncClock() {
+  const d = new Date(), z = (n) => String(n).padStart(2, '0');
+  const now = `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+  const r = await (await dvrSession()).request(1450, { Name: 'OPTimeSetting', OPTimeSetting: now });
+  if (r.Ret !== 100) throw new Error(`a câmera recusou (${r.Ret})`);
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Relógio da câmera acertado: ${now}`);
+  return { ok: true, time: now };
+}
+async function rebootCamera() {
+  await (await dvrSession()).request(1450, { Name: 'OPMachine', OPMachine: { Action: 'Reboot' } }).catch(() => {});
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Câmera reiniciando (pedido)`);
+  return { ok: true };
+}
+
+// Falar pela câmera: o app manda PCM 16 bits 8 kHz (POST /api/talk, aos pedaços); aqui vira G.711 A-law e vai pela
+// conversa do DVRIP numa sessão só dela: pede (1434, Claim), começa (1430, Start: a câmera não responde) e manda o
+// áudio no 1432 em quadros de 40 ms (cabeçalho 00 00 01 FA 0E 02 + tamanho, igual ao que ela manda de volta no 1433).
+// Conferido em 26/10 sem som: ela aceita a conversa e começa a mandar o microfone dela.
+function alaw(sample) {
+  let sign = (sample >> 8) & 0x80;
+  if (sign) sample = -sample - 1;
+  if (sample > 32635) sample = 32635;
+  let exp = 7;
+  for (let mask = 0x4000; (sample & mask) === 0 && exp > 0; exp--, mask >>= 1) {}
+  const mant = (sample >> (exp === 0 ? 4 : exp + 3)) & 0x0f;
+  return ((sign | (exp << 4) | mant) ^ 0x55) & 0xff;
+}
+let talking = null;
+async function talk(req, res) {
+  if (talking) return json(res, 409, { error: 'alguém já está falando pela câmera' });
+  const d = await dvrip(cam.addr, cam.user, cam.pass);
+  talking = d;
+  const fmt = { BitRate: 128, EncodeType: 'G711_ALAW', SampleBit: 8, SampleRate: 8000 };
+  const command = (action) => d.sendRaw(1430, Buffer.from(JSON.stringify({ Name: 'OPTalk', OPTalk: { Action: action, AudioFormat: fmt }, SessionID: d.sessionId }) + '\n\0'));
+  try {
+    const claim = await d.request(1434, { Name: 'OPTalk', OPTalk: { Action: 'Claim', AudioFormat: fmt } });
+    if (claim.Ret !== 100) throw new Error(`a câmera não aceitou a conversa (${claim.Ret})`);
+    command('Start');
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Falando pela câmera`);
+    let rest = Buffer.alloc(0), sent = 0;
+    for await (const chunk of req) {
+      rest = Buffer.concat([rest, chunk]);
+      while (rest.length >= 640) {   // 320 amostras = 40 ms
+        const pcm = rest.subarray(0, 640); rest = rest.subarray(640);
+        const frame = Buffer.alloc(8 + 320);
+        frame.set([0x00, 0x00, 0x01, 0xfa, 0x0e, 0x02], 0);
+        frame.writeUInt16LE(320, 6);
+        for (let i = 0; i < 320; i++) frame[8 + i] = alaw(pcm.readInt16LE(i * 2));
+        d.sendRaw(1432, frame);
+        sent++;
+      }
+    }
+    json(res, 200, { ok: true, seconds: sent * 0.04 });
+  } catch (e) {
+    json(res, 500, { error: e.message });
+  } finally {
+    try { command('Stop'); } catch {}
+    setTimeout(() => d.close(), 300);
+    talking = null;
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} Parou de falar pela câmera`);
+  }
+}
+
 // ---------- A IA: ligar, os recursos e o rigor (GET/POST /api/ai) ----------
 function aiInfo() {
   return { ok: true, available: !!ai.model, model: ai.model?.name || null, device: ai.model?.device || null,
@@ -856,6 +974,9 @@ async function screenControls() {
   return [
     ...(night == null ? [] : [{ id: 'night', type: 'toggle', label: L('Visão noturna', 'Night vision'), value: night }]),
     ...(light == null ? [] : [{ id: 'light', type: 'toggle', label: L('Luz branca', 'White light'), value: light }]),
+    // Sem a IA, o seguir que existe é o da própria câmera (de fábrica): não pesa em nada
+    ...(!aiSettings.enabled && cam.dvr && perfil?.has('motor') !== false ? await camConfig('Detect.DetectTrack').then(t => t ? [{ id: 'camTrack', type: 'toggle',
+      label: L('Seguir pessoa (da câmera)', 'Follow person (camera)'), value: !!t.Enable }] : []).catch(() => []) : []),
     ...(aiSettings.enabled && PROFILE.ptz?.personFollow && perfil?.has('motor') !== false ? [{ id: 'follow', type: 'toggle', label: L('Seguir pessoa', 'Follow person'), value: follow.enabled }] : []),
   ];
 }
@@ -869,6 +990,7 @@ async function screenControl(id, value) {
       return setImaging({ ircut: String(value) });
     },
     night: () => setNightVision(!!value),
+    camTrack: () => setCameraOwn({ track: !!value }),
     light: () => setWhiteLight(!!value),
     wdr: () => setImaging({ wdr: value ? 'ON' : 'OFF' }),
     brightness: () => setImaging({ brightness: +value }),
@@ -1741,6 +1863,8 @@ async function screenInfo() {
     lenses: PROFILE.lenses || null,
     video: HAS_FFMPEG ? { mjpeg: '/api/screen/video', formats: live ? ['ts', 'mjpeg'] : H264 ? ['h264', 'mjpeg'] : ['mjpeg'],
       views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'] } : null,
+    cameraPerson: cameraPersonOn,
+    ptz: !!(cam.dvr || cam.onvif) && perfil?.has('motor') !== false,
     ai: { status: ai.status, enabled: aiSettings.enabled, model: ai.model?.name || null, device: ai.model?.device || null, events: '/api/screen/events' },
     audio: live && PROFILE.audio?.microphone !== false ? { pcm: '/api/screen/audio', rate: 8000, channels: 1 } : null,
     controls: await screenControls().catch(() => []),
@@ -2105,6 +2229,10 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, perfilInfo());
       }
       case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
+      case '/api/camera/own': return json(res, 200, req.method === 'POST' ? await setCameraOwn(await readBody(req)) : { ok: true, ...(await cameraOwn()) });
+      case '/api/camera/clock': return json(res, 200, await syncClock());
+      case '/api/camera/reboot': return json(res, 200, await rebootCamera());
+      case '/api/talk': return talk(req, res);
       case '/api/ai': return json(res, 200, req.method === 'POST' ? setAi(await readBody(req)) : aiInfo());
       case '/api/summaries': return json(res, 200, { ok: true, days: summaries() });
       case '/api/diagnose': return json(res, 200, await diagnose((await readBody(req)).what));

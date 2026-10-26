@@ -192,6 +192,7 @@ private fun LiveVideo(live: Live, view: String, visible: Boolean, modifier: Modi
 @Composable
 private fun AiVideo(live: Live, view: String, visible: Boolean, modifier: Modifier, fit: Boolean) {
     val hub = live.hub ?: return
+    RoomSound(hub, visible && live.listen)
     var frame by remember(view) { mutableStateOf<ImageBitmap?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     DisposableEffect(hub, view, visible) {
@@ -302,7 +303,7 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
     var askAi by remember { mutableStateOf(false) }
     if (askAi) androidx.compose.material3.AlertDialog(onDismissRequest = { askAi = false },
         title = { Text("A Proteção usa a IA") },
-        text = { Text("Para avisar quando aparecer alguém, o computador precisa olhar a câmera e saber que é uma pessoa. Ligue a IA primeiro.") },
+        text = { Text("Para avisar quando aparecer alguém, alguém precisa saber que é uma pessoa: a IA, ou a detecção de pessoa da própria câmera (Câmeras → a câmera → A própria câmera). Ligue uma das duas.") },
         confirmButton = { Button(onClick = { askAi = false; onAi() }, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Ver a IA") } },
         dismissButton = { TextButton(onClick = { askAi = false }) { Text("Agora não", color = palette.muted) } })
     Page {
@@ -352,7 +353,7 @@ fun HomeScreen(live: Live, visible: Boolean, onCamera: () -> Unit, onSystem: () 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ModeCard(Icons.Outlined.Shield, "Proteção", if (live.protectionOn) "Ativada" else "Desativada", live.protectionOn,
                 Modifier.weight(1f), onLongClick = onProtection) { on ->
-                if (on && !live.aiOn) { askAi = true; return@ModeCard }
+                if (on && !live.aiOn && !live.cameraPerson) { askAi = true; return@ModeCard }
                 scope.launch {
                     withContext(Dispatchers.IO) { runCatching { hub.setProtection(on); hub.screen() } }
                         .onSuccess { live.info = it }.onFailure { live.problem = "Não deu: ${it.message}" }
@@ -452,7 +453,11 @@ fun CameraScreen(live: Live, visible: Boolean, onBack: () -> Unit, onFeatures: (
             if (view != "whole") VideoChip(if (view == "top") "1/2" else "2/2", modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
             Text(live.cameraName, color = Color.White, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.align(Alignment.BottomStart).padding(14.dp))
-            if (live.moving) VideoChip("Movimento", modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp))
+            if (live.moving) VideoChip("Movimento", modifier = Modifier.align(Alignment.TopEnd).padding(start = 0.dp, top = if (view != "whole") 52.dp else 12.dp, end = 12.dp))
+            Row(Modifier.align(Alignment.BottomEnd).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ListenButton(live)
+                TalkButton(live, onNote = { live.problem = it })
+            }
         }
         // Which lens: both, the fixed one (1/2) or the one that turns (2/2)
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -493,6 +498,10 @@ fun CameraScreen(live: Live, visible: Boolean, onBack: () -> Unit, onFeatures: (
                     Switch(on, onCheckedChange = { flip(c, it) }, colors = SwitchDefaults.colors(checkedTrackColor = Blue), modifier = Modifier.padding(top = 4.dp))
                 }
             }
+        }
+        if (live.hasPtz) {
+            Spacer(Modifier.height(14.dp))
+            PtzPad(hub, onNote = { live.problem = it })
         }
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().card(palette).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -914,6 +923,7 @@ fun FeaturesScreen(live: Live, onBack: () -> Unit, onZones: () -> Unit) {
                 Switch(pets, onCheckedChange = { pets = it; scope.launch { withContext(Dispatchers.IO) { runCatching { hub.setPets(it) } } } },
                     colors = SwitchDefaults.colors(checkedTrackColor = Blue))
             }
+            CameraOwnSection(hub)
             PageTitle("O que a câmera faz", "${caps.count { it.optString("status") == "ok" }} recursos conferidos")
             Button(enabled = !checking, onClick = {
                 checking = true

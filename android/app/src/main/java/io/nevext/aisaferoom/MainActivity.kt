@@ -81,6 +81,11 @@ class Live {
     val aiOn: Boolean get() = info?.optJSONObject("ai")?.optBoolean("enabled") == true
     /** Away from home (using the address set in Conexão): the camera isn't reachable direct, the video comes via the computer. */
     var away by mutableStateOf(false)
+    /** Hearing the room (the speaker on the video). */
+    var listen by mutableStateOf(false)
+    val hasPtz: Boolean get() = info?.optBoolean("ptz") == true
+    /** The camera detects people by itself: the Protection works without the AI. */
+    val cameraPerson: Boolean get() = info?.optBoolean("cameraPerson") == true
     var seenAt by mutableStateOf(0L)   // activities after this are new (the number on the Atividades tab)
     val unseen: Int get() = (0 until activity.length()).mapNotNull { activity.optJSONObject(it) }
         .count { it.optString("type") in setOf("person", "animal") && it.optLong("at") > seenAt }

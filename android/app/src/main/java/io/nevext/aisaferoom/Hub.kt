@@ -34,6 +34,18 @@ class Hub(val root: String, val key: String?) {
     /** How the camera and the AI are connected: grade 0–3 (Péssimo, Regular, Bom, Ótimo) and a line of detail. */
     fun connection(): JSONObject = json("$base/api/connection")
 
+    /** Turn the lens: dir up/down/left/right with action start/stop; "home" goes to the saved position, "sethome" saves it. */
+    fun ptz(dir: String, action: String) { json("$base/api/ptz", JSONObject().put("dir", dir).put("action", action).toString()) }
+    /** What the camera does by itself: its person detection, its follow, the SD card. */
+    fun cameraOwn(): JSONObject = json("$base/api/camera/own")
+    fun setCameraOwn(body: JSONObject): JSONObject = json("$base/api/camera/own", body.toString())
+    fun syncClock(): JSONObject = json("$base/api/camera/clock", "{}")
+    fun reboot(): JSONObject = json("$base/api/camera/reboot", "{}")
+    fun setCameraPassword(password: String): JSONObject = json("$base/api/camera-password", JSONObject().put("password", password).toString(), timeoutMs = 60_000)
+    /** The room's sound (PCM 16 bits 8 kHz) and where to send the voice to talk through the camera. */
+    val audioUrl get() = "$base/api/screen/audio"
+    val talkUrl get() = "$base/api/talk"
+
     /** The camera's RTSP addresses (with its login), to watch direct without the AI. */
     fun directStream(): JSONObject = json("$base/api/screen/direct-stream")
     /** The AI: on or off (off by default), its features and the rigor. */

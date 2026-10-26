@@ -101,13 +101,15 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
             playWhenReady = true
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) { playing = true; failed = false } }
-                override fun onPlayerError(error: PlaybackException) { playing = false; failed = true }
+                override fun onPlayerError(error: PlaybackException) { playing = false; failed = true; url = null }   // the password may have changed
                 override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
             })
             prepare()
         }
     }
     DisposableEffect(player) { onDispose { player?.release(); playing = false } }
+    // The room's sound comes in the camera's own stream: just turn it up
+    LaunchedEffect(player, live.listen) { player?.volume = if (live.listen) 1f else 0f }
     // The camera dropped: try again in a few seconds
     LaunchedEffect(failed) {
         if (!failed) return@LaunchedEffect

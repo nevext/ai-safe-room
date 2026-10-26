@@ -21,6 +21,7 @@ export async function dvrip(host, user = 'admin', password = '', port = 34567) {
   let buffer = Buffer.alloc(0);
   let pending = [];
   let queue = Promise.resolve();
+  const listeners = new Set();   // mensagens que a câmera manda sem pedido (alarmes: 1504)
 
   const failAll = error => {
     for (const item of pending.splice(0)) item.reject(error);
@@ -49,7 +50,13 @@ export async function dvrip(host, user = 'admin', password = '', port = 34567) {
       const messageId = header.readUInt16LE(14);
 
       const item = pending.findIndex(waiter => waiter.messageId === messageId);
-      if (item < 0) continue;
+      if (item < 0) {
+        if (!listeners.size) continue;
+        let msg = null;
+        try { msg = JSON.parse(body.toString('utf8').replace(/[\0\n\r]+$/, '')); } catch { msg = body; }
+        for (const fn of listeners) try { fn(messageId, msg); } catch {}
+        continue;
+      }
       const waiter = pending.splice(item, 1)[0];
       try {
         const reply = JSON.parse(body.toString('utf8').replace(/[\0\n\r]+$/, ''));
@@ -122,6 +129,18 @@ export async function dvrip(host, user = 'admin', password = '', port = 34567) {
       // A câmera fecha a sessão sem avisar (ao reiniciar, ou se o login pegou ela ainda ligando)
       get closed() { return socket.destroyed; },
       request,
+      /** Ouve o que a câmera manda sozinha (alarmes); devolve a função que para de ouvir. */
+      on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+      /** Manda um pacote sem esperar resposta (o áudio da conversa vai assim). */
+      sendRaw(messageId, body) {
+        const header = Buffer.alloc(HEADER);
+        header[0] = 0xff;
+        header.writeUInt32LE(session, 4);
+        header.writeUInt32LE(sequence++, 8);
+        header.writeUInt16LE(messageId, 14);
+        header.writeUInt32LE(body.length, 16);
+        socket.write(Buffer.concat([header, body]));
+      },
       close() {
         clearInterval(keepalive);
         socket.end();
