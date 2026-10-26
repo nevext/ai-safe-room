@@ -34,6 +34,8 @@ import androidx.compose.material.icons.automirrored.outlined.DirectionsWalk
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DarkMode
@@ -823,6 +825,8 @@ fun SettingsScreen(onOpen: (Screen) -> Unit) {
             ListRow(Icons.Outlined.Palette, "Aparência", "Tema claro/escuro", onClick = { onOpen(Screen.Appearance) })
             ListRow(Icons.Outlined.Lock, "Privacidade", "Dados e permissões", onClick = { onOpen(Screen.Privacy) })
             ListRow(Icons.Outlined.Wifi, "Conexão", "Status, reconectar e ver de fora de casa", onClick = { onOpen(Screen.System) })
+            ListRow(Icons.Outlined.Place, "Onde pôr a câmera", "Onde não pôr, e o que ajuda a imagem e a IA", onClick = { onOpen(Screen.Placement) })
+            ListRow(Icons.Outlined.Info, "Sobre", "Versão, termos de uso, privacidade", onClick = { onOpen(Screen.About) })
             ListRow(Icons.Outlined.MonitorHeart, "Diagnóstico", "Testar a câmera, o Wi-Fi dela e a IA", onClick = { onOpen(Screen.Diagnostics) })
         }
         Spacer(Modifier.height(20.dp))

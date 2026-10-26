@@ -81,6 +81,7 @@ em `android/keystore.properties`, fora do git). Versões para baixar: [Releases]
 - [`FEATURES.md`](FEATURES.md): o que está pronto e o que falta
 - [`docs/PUBLICAR.md`](docs/PUBLICAR.md): servidor, nuvens das marcas, Firebase, Google Play
 - [`docs/PRIVACIDADE.md`](docs/PRIVACIDADE.md): política de privacidade (rascunho, LGPD)
+- [`docs/TERMOS.md`](docs/TERMOS.md): termos de uso (rascunho)
 - [`docs/DESCOBERTA.md`](docs/DESCOBERTA.md): como a câmera foi investigada
 - [`docs/AI-SAFE-CAM.md`](docs/AI-SAFE-CAM.md): o plano do produto
 

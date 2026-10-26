@@ -56,6 +56,14 @@ só para a IA.
       camera-ai uma vez).
 - [ ] Fora de casa sem o computador: pela nuvem da marca (XM / JFTech).
 
+## Família: donos, membros e convidados (a fazer)
+
+Decidido em 26/10: até 2 **donos** (mexem em tudo, e só eles permitem quem entra); **membros** veem ao vivo, ouvem,
+falam, recebem os alertas e as atividades, luz, visão noturna e girar, mas **não** mexem na Proteção, na Privacidade,
+na IA, nos rostos, na senha nem na família; **convidados** (babá, diarista) com prazo, só o ao vivo, ouvir e falar.
+A regra fica no camera-ai, não só escondendo botões. Membros e convidados não recebem a senha da câmera (o vídeo
+vai pelo computador até a câmera ter um usuário só de ver).
+
 ## Ideia: configurar câmera nova pelo AI Safe Room
 
 Quem comprou a câmera baixa o AI Safe Room para pôr ela no Wi-Fi (de graça), em vez do app da marca. É a porta de
@@ -70,7 +78,8 @@ entrada: o app já está na casa no primeiro dia e a IA fica a um toque. Cada ma
        câmera assim que elas chegarem.
 3. [ ] **Avisos pelo FCM**: servidor e app, faltando só as chaves.
 4. [ ] **Regras da Play**:
-   - [ ] política de privacidade (rostos são dado biométrico, sensível na LGPD: consentimento, onde fica, como apagar)
+   - [x] política de privacidade (rascunho em docs/PRIVACIDADE.md e na tela Privacidade; falta revisão jurídica)
+   - [x] termos de uso (rascunho em docs/TERMOS.md e na tela Sobre → Termos)
    - [ ] "Apagar minha conta e meus dados" dentro do app
    - [ ] formulário Data safety (o texto pronto)
    - [ ] chave de assinatura, AAB, textos e imagens da loja

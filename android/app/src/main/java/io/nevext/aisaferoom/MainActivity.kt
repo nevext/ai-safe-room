@@ -56,6 +56,9 @@ sealed interface Screen {
     data object Diagnostics : Screen
     data object Summaries : Screen
     data object Notifications : Screen
+    data object About : Screen
+    data object Terms : Screen
+    data object Placement : Screen
     data class Soon(val title: String) : Screen
 }
 
@@ -309,6 +312,19 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             Screen.Diagnostics -> if (h != null) {
                 BackHandler(onBack = back)
                 DiagnosticsScreen(live, onBack = back)
+            }
+            Screen.About -> {
+                BackHandler(onBack = back)
+                AboutScreen(onBack = back, onTerms = { screen = Screen.Terms }, onPrivacy = { screen = Screen.Privacy },
+                    onPlacement = { screen = Screen.Placement })
+            }
+            Screen.Terms -> {
+                BackHandler { screen = Screen.About }
+                TermsScreen(onBack = { screen = Screen.About })
+            }
+            Screen.Placement -> {
+                BackHandler(onBack = back)
+                PlacementScreen(onBack = back)
             }
             Screen.Notifications -> {
                 BackHandler(onBack = back)
