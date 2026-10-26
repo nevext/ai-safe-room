@@ -1,7 +1,7 @@
 {
-  "name": "camera-ai",
+  "name": "ai-safe-room",
   "private": true,
-  "description": "Controle local da câmera XM/iCSee: ONVIF/RTSP, IA (pessoa/animal) e a API das telas (TV nevtv, celular).",
+  "description": "AI Safe Room: o camera-ai, o cérebro no computador de casa (IA de pessoa e animal, rostos, atividades e a API das telas para o app e as TVs).",
   "scripts": {
     "start": "node server/proxy.mjs"
   },

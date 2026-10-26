@@ -1,146 +1,93 @@
-# camera-ai
+# AI Safe Room
 
-Controle e visualização de uma **câmera IP de duas lentes** (XiongMai / app iCSee),
-com interface mobile, detecção de pessoas/animais por IA e **sem depender do app nem da
-nuvem do fabricante**. Tudo roda local, na sua rede.
+Câmeras de casa com inteligência, sem depender do app nem da nuvem do fabricante. O app abre como a **câmera normal**
+(direto nela, como o app original dela) e a **IA é escolha da pessoa**: liga quando quiser, cada recurso separado.
 
-![status](https://img.shields.io/badge/status-em%20desenvolvimento-blue)
+![status](https://img.shields.io/badge/status-teste%200.x-blue) ![android](https://img.shields.io/badge/Android-8%2B-green)
 
-## O que é
+## O que faz
 
-A câmera (modelo `XM232_X6S-WEQ-H_8M`, 2 lentes de 4MP = "8M") só tem o app iCSee e um
-"Web Viewer" antigo de plugin que não funciona em navegador moderno. Este projeto fala
-**ONVIF + RTSP** direto com ela e entrega:
+**A câmera, sem IA** (celular e câmera, sem o computador):
+- ao vivo direto da câmera, lentes de câmeras de duas lentes (Ambas, 1/2, 2/2), tela cheia com informações e funções;
+- visão noturna, luz branca, girar a lente com setas e posição salva, seguir pessoa e detecção de pessoa da própria
+  câmera, ouvir o quarto e falar pela câmera;
+- foto, relógio, reiniciar, trocar a senha da câmera; o vídeo escolhido pelo que o celular aguenta.
 
-- Vídeo ao vivo no navegador (PC e celular), escolhendo **Câmera 1 / Câmera 2 / Ambas**
-  (as duas lentes vêm empilhadas num frame só; a interface recorta cada uma).
-- Foto, gravação local, ouvir o microfone, ajustes de imagem (brilho/contraste/saturação/
-  nitidez, WDR, dia/noite) — tudo via ONVIF.
-- **Detecção por IA no próprio camera-ai** (RF-DETR na placa de vídeo, licença Apache 2.0; YOLO11s ou COCO-SSD de reserva): quadrados
-  **verde = pessoa**, **laranja = animal**, **vermelho = incerto**. Roda uma vez, no PC, e vai
-  para **todas as telas** (navegador, celular, TVs com o nevtv). Nenhuma imagem sai do PC.
-- **A câmera em qualquer TV da casa** pelo [nevtv](https://github.com/nevext/nevtv): a TV acha o
-  camera-ai sozinha e mostra o que ele oferece (vídeo da lente nítido, IA, controles). Função
-  nova aqui aparece nas TVs sem atualizar o nevtv. Com o PC desligado, a TV fala direto com a
-  câmera e fica com o que consegue sozinha (imagem, dia/noite, aviso de movimento; sem IA).
-- Otimização automática de FPS/bitrate (a câmera vinha travada em 12fps).
+**Com a IA** (no computador de casa, o camera-ai):
+- atividades de pessoas e animais em visitas (quantas juntas), rigor da detecção, zonas para ignorar, "Foi engano";
+- pessoas conhecidas pelo rosto (cadastro guiado, com consentimento), "Quem é?" para aprender, "Provavelmente" pela roupa;
+- Proteção com avisos no celular (ou só de desconhecidos), por horário; Privacidade (a câmera cobre a imagem);
+- seguir pessoa pela IA, resumo dos dias.
 
-Interface no estilo do [nevext.com.br](https://nevext.com.br) (fonte Geist, azul #2563eb,
-claro/escuro automático).
+**Sempre:** conexão da câmera e da IA (Péssimo a Ótimo) com reconectar, diagnóstico (Wi-Fi da câmera, câmera e IA,
+vistoria completa), família e aparelhos com acesso, ver de fora de casa, tema claro/escuro.
 
-## Como funciona (arquitetura)
+O que está pronto e o que falta: [`FEATURES.md`](FEATURES.md). O caminho até a loja: [`docs/PUBLICAR.md`](docs/PUBLICAR.md).
+
+## As partes
 
 ```
-  Câmera XM ──ONVIF(8899)/RTSP(554)──►  server/proxy.mjs  (o "cérebro" da câmera, no PC)
-                                         │  IA (server/ai.mjs), MJPEG via ffmpeg, controles ONVIF
-                                         │
-           ┌─────────────────────────────┼──────────────────────────────┐
-           ▼                             ▼                              ▼
-   navegador (PC/celular)       TVs com o nevtv                  app do celular
-   index.html + assets/         /api/screen (porta 8787)         /api/screen
-                                acha o PC por UDP 8788
+                 ┌──────────── RTSP (vídeo) ─────────────┐
+   Câmera ───────┤                                       ├──► App Android (AI Safe Room)
+ (XM / iCSee)    └── DVRIP (controle), ONVIF ──┐         │      sem IA: fala direto com a câmera
+        │                                       │         │      com IA: pelo camera-ai
+        └──── 1 conexão de vídeo ──► camera-ai (computador de casa, porta 8787)
+                                      IA, rostos, atividades, Proteção, avisos
+                                         ├──► App Android
+                                         └──► TVs com o nevtv
 ```
 
-**API das telas** (`/api/screen…`): é o contrato com o nevtv e qualquer outra tela.
-- `GET /api/screen`: a câmera (nome, modelo, série, IPs), as lentes, o vídeo, o estado da IA e os
-  **controles** (`choice`, `level`, `toggle`, com rótulo `pt`/`en`). A tela monta o painel com o que
-  vier; controle novo aqui = controle novo em todas as TVs.
-- `POST /api/screen/control` `{id, value}`: muda um controle; devolve todos de novo.
-- `GET /api/screen/events`: NDJSON, uma linha por análise (`detections`: caixas em fração do
-  quadro inteiro, 0–1), `motion` (`active`: o detector de movimento da própria câmera, quando muda)
-  e um `ping` a cada 5 s. A IA só roda enquanto alguma tela escuta.
-- `GET /api/screen/video?view=whole|top|bottom&width=&height=&format=h264|mjpeg`: o vídeo já recortado
-  na lente e no tamanho da tela (o PC decodifica o vídeo grande, que as TVs não aguentam).
-  `h264`: H.264 de baixo atraso na placa de vídeo (NVENC/QSV/AMF, ou x264 no processador), ~3 Mbps,
-  **~1 s de atraso**; se a tela ficar para trás, a conexão fecha e ela reconecta no ao vivo. `mjpeg`:
-  JPEG a JPEG, sempre o mais novo (os do meio são pulados), para navegador e TVs sem H.264.
-- `GET /api/events`: os clipes de quando aparece alguém (`{enabled, recording, events:[{id, at, label,
-  seconds, video, thumb}]}`); `GET /api/events/<dia>/<arquivo>.mp4|.jpg` serve o clipe (com Range) e a foto.
-  `POST /api/events` `{enabled}` liga/desliga (lembrado; ligado, a IA olha o tempo todo), `{test:true}` grava um
-  clipe agora, `{delete:id}` apaga. Ficam em `server/eventos/` por 7 dias. Cada clipe novo também sai em
-  `/api/screen/events` (`{type:"event"}`).
-- `GET /api/vistoria`: o teste da câmera. Nível (1 Básico, 2 Bom, 3 Completo), as medidas da entrega de
-  verdade (quadros/s que chegam × filmados, Mbps, rajadas, perdas, travadas, quedas na última hora), a
-  lista do que a câmera tem e dicas. Medido em segundo plano enquanto o vídeo está aberto; o nível
-  também vem em `GET /api/screen` (`quality`). `POST /api/vistoria` `{seconds}`: teste completo, vídeo
-  grande e pequeno (o pequeno só com a câmera livre: ela não aguenta duas conexões).
-- Descoberta: a TV manda `camera-ai?` em broadcast UDP na **porta 8788** e recebe
-  `{hub, port, serial, hosts}`.
-- Ao ligar, o proxy conecta sozinho: `CAMERA=ip`, ou a última câmera (`server/state.json`), ou a
-  primeira que responder na rede (WS-Discovery).
+| Parte | Pasta | O que é |
+|---|---|---|
+| App Android | [`android/`](android/) | O AI Safe Room no celular |
+| camera-ai | [`server/`](server/) | O "cérebro" no computador de casa: IA, rostos, atividades, avisos e a API das telas |
+| Página web | `index.html`, [`assets/`](assets/) | A mesma câmera pelo navegador (PC e celular) |
+| Perfis de câmera | [`profiles/`](profiles/) | O que sabemos de cada modelo de câmera |
+| TV | [nevtv](https://github.com/nevext/nevtv) | A câmera nas TVs da casa, achando o camera-ai sozinha |
 
-- **Navegador não toca RTSP.** O proxy usa o **ffmpeg** para converter RTSP → MJPEG e serve
-  tudo (UI + API) na **porta 8787**.
-- A interface e a API ficam na mesma origem, então funciona igual no PC e no celular.
+## Tecnologia
 
-### A câmera (dados confirmados)
-- IP na rede: `192.168.0.41` (login ONVIF `admin`, senha vazia — padrão de fábrica).
-- 1 fonte de vídeo com as **2 lentes empilhadas**: o ONVIF diz 3072×2048, mas o RTSP entrega
-  **2304×2592** (cada lente 2304×1296, 16:9).
-- Portas abertas: RTSP 554, ONVIF 8899, DVRIP 34567, HTTP 80.
-- Detalhes técnicos e como tudo foi descoberto: [`docs/DESCOBERTA.md`](docs/DESCOBERTA.md).
+| Onde | Usa |
+|---|---|
+| **App Android** | Kotlin, Jetpack Compose (Material 3), AndroidX Media3 / ExoPlayer (RTSP direto da câmera), cliente DVRIP próprio em Kotlin (controle e conversa pela câmera, G.711), Android Keystore (AES-GCM para a senha da câmera e a chave), serviço em primeiro plano para os avisos; AGP 9, Gradle 9, JDK 21, Android 8+ |
+| **camera-ai** | Node.js (ES modules, sem framework), ffmpeg (uma conexão com a câmera para tudo: vistas H.264 com NVENC/QSV/AMF ou x264, quadros para a IA, áudio), ONNX Runtime |
+| **IA** | RF-DETR medium (pessoa e animal, Apache 2.0, na placa de vídeo), YuNet + SFace do OpenCV Zoo (rosto, Apache 2.0), cor da roupa por histograma HSV; YOLO11s e COCO-SSD (TensorFlow.js) de reserva |
+| **Câmera** | ONVIF (descoberta, perfis, eventos de movimento), RTSP, DVRIP/Sofia (porta 34567: visão noturna, luz, PTZ, avisos 1504, conversa 1430/1432/1434, configurações), foto por HTTP |
+| **Página web** | HTML, CSS e JavaScript puros (fonte Geist) |
+| **TV (nevtv)** | Java, Android MediaPlayer, ONVIF |
+| **Planejado** | Servidor na nuvem com Postgres, nuvens dos fabricantes (XM/JFTech, Tuya), Firebase Cloud Messaging, WebRTC |
 
 ## Como rodar
 
-Pré-requisitos: **Node 18+** e o **ffmpeg** (baixe uma vez):
+**camera-ai** (no computador de casa; Windows, Node 18+):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File server/get-ffmpeg.ps1   # baixa ffmpeg p/ server/bin
-npm install                                                       # a IA (ONNX Runtime + TensorFlow.js)
-powershell -ExecutionPolicy Bypass -File server/get-rfdetr.ps1    # o RF-DETR (opcional, bem mais preciso; Apache 2.0)
-node server/proxy.mjs                                             # sobe tudo na porta 8787
+powershell -ExecutionPolicy Bypass -File server/get-ffmpeg.ps1   # o ffmpeg, em server/bin
+npm install                                                       # a IA (ONNX Runtime)
+powershell -ExecutionPolicy Bypass -File server/get-rfdetr.ps1    # o detector de pessoa e animal
+powershell -ExecutionPolicy Bypass -File server/get-faces.ps1     # os modelos de rosto (opcional)
+node server/proxy.mjs                                             # porta 8787
+powershell -ExecutionPolicy Bypass -File server/autostart.ps1     # ligar junto com o Windows (sem janela)
 ```
 
-**Ligar junto com o Windows** (sem janela; se cair, volta sozinho em 5 s):
+A senha do camera-ai é criada na primeira vez e aparece em `server\camera-ai.log`. No próprio PC não pede; celular e
+TV pedem uma vez, ou alguém que já entrou toca em Permitir. Firewall: TCP 8787 e UDP 8788 (para as TVs acharem o PC).
 
-```powershell
-powershell -ExecutionPolicy Bypass -File server/autostart.ps1           # instala e já liga
-powershell -ExecutionPolicy Bypass -File server/autostart.ps1 -Remove   # tira e desliga
-```
+**App Android:** abra `android/` no Android Studio, ou `android\gradlew assembleRelease` (a chave de assinatura fica
+em `android/keystore.properties`, fora do git). Versões para baixar: [Releases](../../releases).
 
-Cria a tarefa agendada `camera-ai` (ao entrar no Windows), que roda `server/hidden.vbs` →
-`server/run.ps1` → `node server/proxy.mjs`. Log da sessão em `server/camera-ai.now.log`.
+## Documentos
 
-Sem o `npm install` tudo funciona, só sem IA. O modelo baixa na 1ª vez para `server/models/`
-e depois roda sem internet.
+- [`FEATURES.md`](FEATURES.md): o que está pronto e o que falta
+- [`docs/PUBLICAR.md`](docs/PUBLICAR.md): servidor, nuvens das marcas, Firebase, Google Play
+- [`docs/PRIVACIDADE.md`](docs/PRIVACIDADE.md): política de privacidade (rascunho, LGPD)
+- [`docs/DESCOBERTA.md`](docs/DESCOBERTA.md): como a câmera foi investigada
+- [`docs/AI-SAFE-CAM.md`](docs/AI-SAFE-CAM.md): o plano do produto
 
-Abrir:
-- **PC:** http://127.0.0.1:8787
-- **Celular (mesma Wi-Fi):** http://192.168.0.33:8787
-  - Se não abrir, liberar a porta no Firewall (uma vez, PowerShell admin):
-    `New-NetFirewallRule -DisplayName "camera-ai" -Direction Inbound -Protocol TCP -LocalPort 8787 -Action Allow -Profile Private`
-  - As TVs também precisam da porta **UDP 8788** (para achar o PC); quando o Windows perguntar
-    ao subir o Node, permitir. Se a rede de casa estiver como *Pública* no Windows, a regra
-    precisa valer para *Public* também.
+## API das telas (camera-ai)
 
-Login: a interface tenta `admin`/senha vazia e padrões XM sozinha. Trocou a senha no app?
-Ponha no ⚙. Gravações caem em `server/gravacoes/`.
-
-Senha do camera-ai: no próprio PC não pede. Celular e TV pedem uma vez. Ela é criada na primeira
-vez que o camera-ai liga e aparece em `server\camera-ai.log`; troque no menu ☰ → Senha.
-
-## Estrutura
-
-```
-index.html            interface (player)
-assets/app.css        estilo (tema nevext, Geist)
-assets/app.js         lógica da UI (lentes, qualidade, PTZ, imagem, áudio, foto, gravar)
-assets/detect.js      desenha a detecção: usa a IA do camera-ai (ou roda a própria, se ela faltar)
-server/proxy.mjs      proxy ONVIF/RTSP + servidor web + API das telas (porta 8787, UDP 8788)
-server/ai.mjs         a IA (RF-DETR na placa de vídeo; YOLO11s ou COCO-SSD de reserva): analisa e manda para as telas
-server/get-rfdetr.ps1 baixa o RF-DETR medium (ONNX, Apache 2.0) para server/models/rfdetr_medium/
-server/get-yolo.ps1   baixa e converte o YOLO11s (AGPL-3.0, só para uso em casa) para server/models/yolo11s/
-server/live.mjs       a conexão única com a câmera: vistas H.264 para as telas e quadros para a IA
-package.json          dependências da IA (npm install)
-profiles/             o que sabemos de cada câmera (lido pelo proxy e pelos apps)
-server/get-ffmpeg.ps1 baixa o ffmpeg estático p/ server/bin
-docs/DESCOBERTA.md    como a câmera foi investigada e tudo que achamos
-FEATURES.md           o que está pronto e o que falta
-```
-
-## Próximos passos
-
-O plano do produto que nasce daqui, o **AI Safe Cam** (níveis por câmera, vistoria, planos, onde roda a IA): [`docs/AI-SAFE-CAM.md`](docs/AI-SAFE-CAM.md).
-
-Ver [`FEATURES.md`](FEATURES.md) — inclui o empacotamento em **APK** e as funcionalidades
-que faltam.
+`GET /api/screen` (a câmera, as lentes, o vídeo, a IA e os controles), `POST /api/screen/control`,
+`GET /api/screen/events` (detecções e movimento, NDJSON), `GET /api/screen/video?view=&format=h264|mjpeg`,
+`GET /api/activity`, `GET/POST /api/ai`, `GET /api/connection`, `POST /api/diagnose`, `GET /api/camera/access`
+(para o app falar com a câmera sozinho). As TVs acham o camera-ai por broadcast UDP na porta 8788. Todas as rotas,
+menos o login e o pedido de acesso, exigem a chave do aparelho.
