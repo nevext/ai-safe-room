@@ -220,17 +220,17 @@ fun TalkButton(live: Live, onNote: (String) -> Unit, modifier: Modifier = Modifi
 @Composable
 fun CameraOwnSection(hub: Hub) {
     val scope = rememberCoroutineScope()
-    var own by remember { mutableStateOf<JSONObject?>(null) }
+    var own by remember { mutableStateOf(Kept.get<JSONObject>("own")) }
     var note by remember { mutableStateOf<String?>(null) }
     var ask by remember { mutableStateOf<String?>(null) }
     var password by remember { mutableStateOf("") }
     var again by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) { own = withContext(Dispatchers.IO) { runCatching { hub.cameraOwn() }.getOrNull() } }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { runCatching { hub.cameraOwn() }.getOrNull() }?.let { own = it; Kept["own"] = it } }
     val run = { what: String, call: () -> JSONObject ->
         note = "$what…"
         scope.launch {
             withContext(Dispatchers.IO) { runCatching(call) }.onSuccess {
-                if (it.optBoolean("ok")) { note = "$what: pronto."; if (it.has("person") || it.has("track")) own = it }
+                if (it.optBoolean("ok")) { note = "$what: pronto."; if (it.has("person") || it.has("track")) { own = it; Kept["own"] = it } }
                 else note = "Não deu: ${it.optString("error")}"
             }.onFailure { note = "Não deu: ${it.message}" }
         }

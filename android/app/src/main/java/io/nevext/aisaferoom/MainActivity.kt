@@ -347,15 +347,26 @@ fun parseDetections(items: JSONArray?): List<Detection> {
     }
 }
 
-/** A picture from the computer (snapshot, thumbnail), loaded off the main thread. */
+/**
+ * What the screens already fetched, kept while the app runs: coming back to a screen shows it at once (no "loading",
+ * nothing jumping into place) and it refreshes behind. Pictures by address (activity thumbnails, faces), up to 120.
+ */
+object Kept {
+    private val values = java.util.concurrent.ConcurrentHashMap<String, Any>()
+    @Suppress("UNCHECKED_CAST") operator fun <T> get(key: String): T? = values[key] as T?
+    operator fun set(key: String, value: Any?) { if (value == null) values.remove(key) else values[key] = value }
+    val pictures = android.util.LruCache<String, ImageBitmap>(120)
+}
+
+/** A picture from the computer (snapshot, thumbnail), loaded off the main thread; the same address shows at once again. */
 @Composable
 fun rememberPicture(hub: Hub, url: String?): ImageBitmap? {
-    var image by remember(url) { mutableStateOf<ImageBitmap?>(null) }
+    var image by remember(url) { mutableStateOf(url?.let { Kept.pictures.get(it) }) }
     LaunchedEffect(url) {
-        if (url == null) return@LaunchedEffect
-        image = withContext(Dispatchers.IO) {
+        if (url == null || image != null) return@LaunchedEffect
+        withContext(Dispatchers.IO) {
             runCatching { hub.bytes(url).let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }.getOrNull()
-        }
+        }?.let { image = it; Kept.pictures.put(url, it) }
     }
     return image
 }

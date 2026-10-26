@@ -271,13 +271,13 @@ private val RIGORS = listOf(
 fun AiScreen(live: Live, onBack: () -> Unit, onPeople: () -> Unit, onZones: () -> Unit) {
     val hub = live.hub ?: return
     val scope = rememberCoroutineScope()
-    var info by remember { mutableStateOf<JSONObject?>(null) }
+    var info by remember { mutableStateOf(Kept.get<JSONObject>("ai")) }
     var note by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { info = withContext(Dispatchers.IO) { runCatching { hub.ai() }.getOrNull() } }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { runCatching { hub.ai() }.getOrNull() }?.let { info = it; Kept["ai"] = it } }
     val change = { body: JSONObject ->
         scope.launch {
             withContext(Dispatchers.IO) { runCatching { hub.setAi(body).also { live.info = hub.screen(); live.controls = hub.screen().optJSONArray("controls") ?: live.controls } } }
-                .onSuccess { info = it; note = null }.onFailure { note = "Não deu: ${it.message}" }
+                .onSuccess { info = it; Kept["ai"] = it; note = null }.onFailure { note = "Não deu: ${it.message}" }
         }
     }
     Page {
@@ -423,12 +423,12 @@ private val hourName = SimpleDateFormat("HH:mm", Locale.forLanguageTag("pt-BR"))
 @Composable
 fun SummariesScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
     val hub = live.hub ?: return
-    var days by remember { mutableStateOf<List<JSONObject>?>(null) }
+    var days by remember { mutableStateOf(Kept.get<List<JSONObject>>("days")) }
     var notify by remember { mutableStateOf(prefs.getBoolean("summary", true)) }
     LaunchedEffect(Unit) {
         days = withContext(Dispatchers.IO) {
             runCatching { hub.summaries().let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } } }.getOrNull()
-        } ?: emptyList()
+        }?.also { Kept["days"] = it } ?: days ?: emptyList()
     }
     Page {
         TopBar("", null, onBack)
@@ -474,10 +474,10 @@ fun SummariesScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
 @Composable
 private fun WifiTuneCard(hub: Hub) {
     val scope = rememberCoroutineScope()
-    var info by remember { mutableStateOf<JSONObject?>(null) }
+    var info by remember { mutableStateOf(Kept.get<JSONObject>("wifiTune")) }
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { info = withContext(Dispatchers.IO) { runCatching { hub.wifiTune() }.getOrNull() } }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { runCatching { hub.wifiTune() }.getOrNull() }?.let { info = it; Kept["wifiTune"] = it } }
     val tuned = info?.optBoolean("tuned") == true
     Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette, selected = tuned).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -517,10 +517,10 @@ private fun WifiTuneCard(hub: Hub) {
 @Composable
 private fun LightVideoCard(hub: Hub) {
     val scope = rememberCoroutineScope()
-    var info by remember { mutableStateOf<JSONObject?>(null) }
+    var info by remember { mutableStateOf(Kept.get<JSONObject>("lightVideo")) }
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { info = withContext(Dispatchers.IO) { runCatching { hub.lightVideo() }.getOrNull() } }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { runCatching { hub.lightVideo() }.getOrNull() }?.let { info = it; Kept["lightVideo"] = it } }
     val i = info ?: return
     Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {

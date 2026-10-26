@@ -169,14 +169,14 @@ fun ProtectionScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
 fun FamilyScreen(live: Live, onBack: () -> Unit) {
     val hub = live.hub ?: return
     val scope = rememberCoroutineScope()
-    var devices by remember { mutableStateOf(JSONArray()) }
+    var devices by remember { mutableStateOf(Kept.get<JSONArray>("devices") ?: JSONArray()) }
     var pending by remember { mutableStateOf(JSONArray()) }
     var removing by remember { mutableStateOf<JSONObject?>(null) }
     var note by remember { mutableStateOf<String?>(null) }
     // The list, and who's asking to come in, every few seconds while open
     LaunchedEffect(Unit) {
         while (true) {
-            withContext(Dispatchers.IO) { runCatching { hub.devices() to hub.pendingAccess() } }.onSuccess { (d, p) -> devices = d; pending = p }
+            withContext(Dispatchers.IO) { runCatching { hub.devices() to hub.pendingAccess() } }.onSuccess { (d, p) -> devices = d; pending = p; Kept["devices"] = d }
             delay(4000)
         }
     }
@@ -316,14 +316,15 @@ private fun JSONObject.grade(): Int? = if (isNull("grade")) null else optInt("gr
 /** The connection, asked again every few seconds while [active]. */
 @Composable
 private fun rememberConnection(hub: Hub, active: Boolean = true): Pair<JSONObject?, (JSONObject) -> Unit> {
-    var info by remember { mutableStateOf<JSONObject?>(null) }
+    // Starts from the last one: on Início the shortcut is there from the first frame (it used to pop in and push the page)
+    var info by remember { mutableStateOf(Kept.get<JSONObject>("connection")) }
     LaunchedEffect(active) {
         while (active) {
-            withContext(Dispatchers.IO) { runCatching { hub.connection() } }.onSuccess { info = it }
+            withContext(Dispatchers.IO) { runCatching { hub.connection() } }.onSuccess { info = it; Kept["connection"] = it }
             delay(5000)
         }
     }
-    return info to { it: JSONObject -> info = it }
+    return info to { it: JSONObject -> info = it; Kept["connection"] = it }
 }
 
 /** On Início: one line with both grades; a tap opens Ajustes → Conexão. */

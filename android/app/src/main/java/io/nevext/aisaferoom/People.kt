@@ -70,9 +70,9 @@ import org.json.JSONObject
 fun PeopleScreen(live: Live, onBack: () -> Unit, onEnroll: () -> Unit) {
     val hub = live.hub ?: return
     val scope = rememberCoroutineScope()
-    var info by remember { mutableStateOf<JSONObject?>(null) }
+    var info by remember { mutableStateOf(Kept.get<JSONObject>("faces")) }
     var removing by remember { mutableStateOf<JSONObject?>(null) }
-    LaunchedEffect(Unit) { info = withContext(Dispatchers.IO) { runCatching { hub.faces() }.getOrNull() } }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { runCatching { hub.faces() }.getOrNull() }?.let { info = it; Kept["faces"] = it } }
     val people = info?.optJSONArray("people")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }.orEmpty()
     Page {
         TopBar("", null, onBack)

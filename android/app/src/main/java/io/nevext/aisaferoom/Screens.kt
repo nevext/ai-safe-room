@@ -193,7 +193,7 @@ private fun LiveVideo(live: Live, view: String, visible: Boolean, modifier: Modi
 private fun AiVideo(live: Live, view: String, visible: Boolean, modifier: Modifier, fit: Boolean) {
     val hub = live.hub ?: return
     RoomSound(hub, visible && live.listen)
-    var frame by remember(view) { mutableStateOf<ImageBitmap?>(null) }
+    var frame by remember(view) { mutableStateOf(Kept.get<ImageBitmap>("aiFrame:$view")) }
     var error by remember { mutableStateOf<String?>(null) }
     DisposableEffect(hub, view, visible) {
         if (!visible) return@DisposableEffect onDispose {}
@@ -201,7 +201,7 @@ private fun AiVideo(live: Live, view: String, visible: Boolean, modifier: Modifi
             BitmapFactory.decodeByteArray(jpg, 0, jpg.size)?.let { frame = it.asImageBitmap(); error = null }
         }, onError = { error = it })
         video.start()
-        onDispose { video.stop() }
+        onDispose { video.stop(); frame?.let { Kept["aiFrame:$view"] = it } }   // the next screen starts from it
     }
     Box(modifier.background(Color(0xFF0B0F17)), contentAlignment = Alignment.Center) {
         val img = frame
@@ -947,13 +947,13 @@ private val STATES = mapOf(
 @Composable
 fun FeaturesScreen(live: Live, onBack: () -> Unit, onZones: () -> Unit) {
     val hub = live.hub ?: return
-    var profile by remember { mutableStateOf<JSONObject?>(null) }
+    var profile by remember { mutableStateOf(Kept.get<JSONObject>("profile")) }
     var checking by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
     var name by remember { mutableStateOf(live.cameraName) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(reload) { profile = withContext(Dispatchers.IO) { runCatching { hub.profile() }.getOrNull() } ?: JSONObject() }
+    LaunchedEffect(reload) { profile = withContext(Dispatchers.IO) { runCatching { hub.profile() }.getOrNull() }?.also { Kept["profile"] = it } ?: profile ?: JSONObject() }
     val caps = profile?.optJSONArray("caps")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }.orEmpty()
         .sortedBy { if (it.optString("status") == "no") 1 else 0 }
 
