@@ -95,7 +95,7 @@ class Dvrip private constructor(private val socket: Socket) {
             d.start()
             val r = d.request(1000, JSONObject().put("EncryptType", "MD5").put("LoginType", "DVRIP-Web")
                 .put("PassWord", hash(password)).put("UserName", user))
-            if (r.optInt("Ret") != 100) { d.close(); throw IOException("a câmera recusou o login (${r.optInt("Ret")})") }
+            if (r.optInt("Ret") != 100) { d.close(); throw Refused(r.optInt("Ret")) }
             r.optString("SessionID").removePrefix("0x").toLongOrNull(16)?.let { d.session = it.toInt() }
             return d
         }
@@ -111,4 +111,10 @@ class Dvrip private constructor(private val socket: Socket) {
             ((b[o + 2].toInt() and 0xff) shl 16) or ((b[o + 3].toInt() and 0xff) shl 24)
         private fun put32(b: ByteArray, o: Int, v: Int) { for (i in 0..3) b[o + i] = ((v shr (8 * i)) and 0xff).toByte() }
     }
+}
+
+/** The camera said no to the login: 203 wrong password, 205 locked after wrong tries, 206 blocked, 204 no such user. */
+class Refused(val code: Int) : IOException("a câmera recusou o login ($code)") {
+    val wrongPassword get() = code == 203 || code == 204
+    val locked get() = code == 205 || code == 206
 }

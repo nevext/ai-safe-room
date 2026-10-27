@@ -1141,15 +1141,22 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
     var cameraPassword by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val tryCamera = { addr: String, password: String ->
+    var trying by remember { mutableStateOf(false) }
+    // typed: the person entered a password (only then a refusal is "senha errada")
+    val tryCamera = { addr: String, password: String, typed: Boolean ->
         scope.launch {
-            error = null
+            error = null; trying = true
             withContext(Dispatchers.IO) { runCatching { Hub.tryCamera(context, addr, password = password) } }
                 .onSuccess { onCamera() }
                 .onFailure {
-                    if (it.message?.contains("recusou o login") == true) { if (locked == addr) error = "Senha errada"; locked = addr }
-                    else error = "A câmera em $addr não respondeu"
+                    val r = it as? Refused
+                    when {
+                        r?.locked == true -> { locked = addr; error = "A câmera bloqueou por causa de senhas erradas. Espere uns 30 minutos (ou desligue e ligue a câmera) e tente de novo." }
+                        r != null -> { locked = addr; if (typed) error = "Senha errada. Lembre: é a senha da câmera, não a do Wi-Fi nem a do computador." }
+                        else -> error = "A câmera em $addr não respondeu: ${it.message}"
+                    }
                 }
+            trying = false
         }
     }
     val tryRoot = { root: String ->
@@ -1170,7 +1177,7 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
         val cams = found.filter { it.camera }
         when {
             pcs.size == 1 -> tryRoot(pcs[0].root)
-            pcs.isEmpty() && cams.size == 1 -> tryCamera(cams[0].root, "")
+            pcs.isEmpty() && cams.size == 1 -> tryCamera(cams[0].root, "", false)
         }
     }
     Page {
@@ -1188,7 +1195,7 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
             }
         } else {
             found.forEach { f ->
-                Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).card(palette).clickable { if (f.camera) tryCamera(f.root, "") else tryRoot(f.root) }.padding(16.dp),
+                Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).card(palette).clickable { if (f.camera) tryCamera(f.root, "", false) else tryRoot(f.root) }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     IconBubble(if (f.camera) Icons.Outlined.Videocam else Icons.Outlined.Devices)
                     Column(Modifier.weight(1f).padding(start = 12.dp)) {
@@ -1205,7 +1212,7 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
         locked?.let { addr ->
             var forgot by remember { mutableStateOf(false) }
             Column(Modifier.fillMaxWidth().padding(top = 8.dp).card(palette).padding(16.dp)) {
-                Text("Achei a câmera, mas ela tem senha", fontWeight = FontWeight.SemiBold)
+                Text("Achei a câmera ($addr), mas ela tem senha", fontWeight = FontWeight.SemiBold)
                 Text("É a senha que alguém pôs na câmera pelo app da marca (iCSee, XMEye…), não a do Wi-Fi. Câmera nova vem sem senha; " +
                     "se pede, alguém já colocou uma.", color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                 Text(if (forgot) "Esconder" else "Não sei a senha", color = Blue, fontSize = 13.sp,
@@ -1218,8 +1225,14 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
             OutlinedTextField(cameraPassword, { cameraPassword = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 label = { Text("Senha da câmera") }, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
-            Button(onClick = { tryCamera(addr, cameraPassword) }, colors = ButtonDefaults.buttonColors(containerColor = Blue),
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) { Text("Entrar") }
+            error?.let { Text(it, color = Red, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp)) }
+            Button(enabled = !trying && cameraPassword.isNotEmpty(), onClick = { tryCamera(addr, cameraPassword, true) }, colors = ButtonDefaults.buttonColors(containerColor = Blue),
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) {
+                if (trying) {
+                    CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    Text("Entrando…", modifier = Modifier.padding(start = 10.dp))
+                } else Text("Entrar")
+            }
         }
         if (!searching && !typing) TextButton(onClick = { typing = true }, modifier = Modifier.padding(top = 4.dp)) {
             Text("Digitar o endereço", color = palette.muted, fontSize = 13.sp)
@@ -1233,13 +1246,13 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
                 if (a.endsWith(":8787")) tryRoot("http://$a")
                 else if (a.isNotEmpty()) scope.launch {
                     val pc = withContext(Dispatchers.IO) { runCatching { Hub("http://${a.substringBefore(':')}:8787", null).screen() } }
-                    if (pc.isSuccess || pc.exceptionOrNull() is Locked) tryRoot("http://${a.substringBefore(':')}:8787") else tryCamera(a.substringBefore(':'), "")
+                    if (pc.isSuccess || pc.exceptionOrNull() is Locked) tryRoot("http://${a.substringBefore(':')}:8787") else tryCamera(a.substringBefore(':'), "", false)
                 }
             }, colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().padding(top = 12.dp).height(48.dp)) {
                 Text("Conectar")
             }
         }
-        error?.let { Text(it, color = Red, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp)) }
+        if (locked == null) error?.let { Text(it, color = Red, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp)) }
     }
 }
 
