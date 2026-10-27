@@ -92,7 +92,7 @@ object SharedVideo {
      * The light video (sub) instead of the big one: decided once for the app (this phone's decoder, or the big one kept
      * stalling). Before, each screen decided again from scratch, picked the big one, and the camera reopened.
      */
-    var light: Boolean? = null
+    var light: Boolean? = true   // the light one by default: on the phone's Wi-Fi the 3K one stops to load every 1-2 s (seen on a real phone, 26/10)
     /** This player already drew a picture: changing screens shows it at once, never "Abrindo a câmera" again. */
     var rendered by androidx.compose.runtime.mutableStateOf(false); private set
     private val started = android.os.SystemClock.elapsedRealtime()
@@ -159,7 +159,8 @@ object SharedVideo {
     }
     fun leave() {
         users = (users - 1).coerceAtLeast(0)
-        if (users == 0) { handler.removeCallbacks(releaseLater); handler.postDelayed(releaseLater, 60_000) }
+        // Stays on while the app is open (Câmeras, Ajustes and back find it playing); MainActivity.onStop closes it
+        if (users == 0) handler.removeCallbacks(releaseLater)
     }
     fun reset() { if (player != null) note("fecha o player"); player?.release(); player = null; url = null; rendered = false }
     private fun stateName(s: Int) = when (s) { Player.STATE_READY -> "tocando"; Player.STATE_BUFFERING -> "carregando"; Player.STATE_ENDED -> "acabou"; else -> "parado" }
