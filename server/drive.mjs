@@ -53,6 +53,7 @@ export function createDrive({ file, sources, log = () => {} }) {
           sync();
           return;
         }
+        if (t.status === 0) continue;   // a internet falhou um instante: pergunta de novo, o código continua valendo
         if (t.body.error === 'slow_down') wait += 5000;
         else if (t.body.error !== 'authorization_pending') { lastError = t.body.error === 'access_denied' ? 'a conta não permitiu' : t.body.error_description || t.body.error; pending = null; return; }
       }
