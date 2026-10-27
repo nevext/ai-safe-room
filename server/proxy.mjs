@@ -2108,11 +2108,20 @@ if (access.devices.length && !access.devices.some(d => d.role)) {
   for (const d of access.devices) d.role = d === oldest ? 'owner' : 'member';
 }
 const owners = () => access.devices.filter(d => d.role === 'owner').length;
-function newDevice(name, role, hours) {
+function newDevice(name, role, hours, ip) {
+  name = String(name || 'Aparelho').slice(0, 40);
+  // O mesmo celular entrando de novo (o app foi reinstalado e perdeu a chave): mesmo nome e mesmo endereço na rede.
+  // O cadastro velho sai, em vez de virar mais um aparelho, e quem era dono continua dono.
+  const again = ip ? access.devices.filter(d => d.ip === ip && d.name === name) : [];
+  if (again.length) {
+    if (again.some(d => d.role === 'owner')) role = 'owner';
+    access.devices = access.devices.filter(d => !again.includes(d));
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} ${name} (${ip}) entrou de novo: o cadastro antigo foi substituído`);
+  }
   role = ['owner', 'member', 'guest'].includes(role) ? role : owners() ? 'member' : 'owner';
   if (role === 'owner' && owners() >= MAX_OWNERS) role = 'member';
-  const d = { id: crypto.randomBytes(6).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), key: crypto.randomBytes(24).toString('hex'),
-    role, at: Date.now(), lastSeen: Date.now() };
+  const d = { id: crypto.randomBytes(6).toString('hex'), name, key: crypto.randomBytes(24).toString('hex'),
+    role, at: Date.now(), lastSeen: Date.now(), ...(ip ? { ip } : {}) };
   if (role === 'guest') d.until = Date.now() + Math.min(24 * 30, Math.max(1, +hours || 8)) * 3600e3;
   access.devices.push(d);
   saveState();
@@ -2166,13 +2175,13 @@ function setRole(id, role, hours, me) {
   return { ok: true, ...devicesInfo(me) };
 }
 // O que cada papel pode. Dono: tudo. Convidado: só ver, ouvir e falar.
-const GUEST_OK = new Set(['/api/me', '/api/screen', '/api/screen/video', '/api/screen/audio', '/api/screen/events', '/api/screen/thumb',
+const GUEST_OK = new Set(['/api/me', '/api/applog', '/api/screen', '/api/screen/video', '/api/screen/audio', '/api/screen/events', '/api/screen/thumb',
   '/api/screen/direct-stream', '/api/state', '/api/snapshot', '/api/talk', '/api/connection', '/api/stream', '/api/audio']);
-const MEMBER_POST_OK = new Set(['/api/screen/control', '/api/ptz', '/api/talk', '/api/connection', '/api/follow', '/api/daynight']);
+const MEMBER_POST_OK = new Set(['/api/applog', '/api/screen/control', '/api/ptz', '/api/talk', '/api/connection', '/api/follow', '/api/daynight']);
 const MEMBER_CONTROLS = new Set(['ircut', 'night', 'light', 'camTrack', 'follow']);
 function allowed(role, pathname, method, body) {
   if (role === 'owner') return true;
-  if (role === 'guest') return GUEST_OK.has(pathname) && (method === 'GET' || ['/api/talk', '/api/connection'].includes(pathname));
+  if (role === 'guest') return GUEST_OK.has(pathname) && (method === 'GET' || ['/api/talk', '/api/connection', '/api/applog'].includes(pathname));
   // Membro: lê quase tudo, mas não a senha da câmera (com ela se mexe em tudo direto na câmera) nem a família
   if (method === 'GET') return !['/api/devices', '/api/access/pending', '/api/camera/own', '/api/vistoria'].includes(pathname);
   if (pathname === '/api/screen/control') return MEMBER_CONTROLS.has(body?.id);
@@ -2209,7 +2218,7 @@ function login(req, res, password, name) {
     return json(res, 401, { ok: false, error: 'senha errada' });
   }
   tries.delete(ip);
-  const d = newDevice(name || 'Navegador', owners() ? 'member' : 'owner');
+  const d = newDevice(name || 'Navegador', undefined, 0, req.socket.remoteAddress.replace(/^::ffff:/, ''));
   res.setHeader('set-cookie', `camkey=${d.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
   return json(res, 200, { ok: true, key: d.key });
 }
@@ -2229,7 +2238,7 @@ function accessRequest(req, name) {
 function accessStatus(id) {
   const r = requests.get(String(id));
   if (!r || Date.now() - r.at > 600000) return { status: 'gone' };
-  if (r.status === 'ok') { requests.delete(r.id); const d = newDevice(r.name, r.role || 'member', r.hours); return { status: 'ok', key: d.key, role: d.role }; }
+  if (r.status === 'ok') { requests.delete(r.id); const d = newDevice(r.name, r.role || 'member', r.hours, r.ip); return { status: 'ok', key: d.key, role: d.role }; }
   return { status: r.status };
 }
 function accessAnswer(id, allow, role, hours) {
