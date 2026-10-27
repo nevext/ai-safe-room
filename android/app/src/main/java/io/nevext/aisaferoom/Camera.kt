@@ -320,6 +320,10 @@ fun CameraOwnSection(hub: Hub) {
                 else "${o.optJSONObject("sd")?.optInt("mb")} MB")
         }
         ListRow(Icons.Outlined.AccessTime, "Acertar o relógio", "A hora da câmera igual à do computador", onClick = { run("Relógio") { hub.syncClock() } })
+        var shown by remember { mutableStateOf<String?>(null) }
+        ListRow(Icons.Outlined.Key, "Senha da câmera", shown?.let { if (it.isEmpty()) "Sem senha" else it } ?: "Toque para ver (a do app da marca)", onClick = {
+            scope.launch { shown = withContext(Dispatchers.IO) { runCatching { hub.cameraAccess().pass }.getOrNull() ?: CameraLink.current()?.access?.pass } }
+        })
         ListRow(Icons.Outlined.Key, "Trocar a senha da câmera", "Só aqui: o app e as TVs continuam funcionando", onClick = { ask = "password" })
         ListRow(Icons.Outlined.RestartAlt, "Reiniciar a câmera", "Fica fora do ar por mais ou menos 1 minuto", onClick = { ask = "reboot" })
     }

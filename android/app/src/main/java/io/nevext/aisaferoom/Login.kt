@@ -166,7 +166,13 @@ fun LinkHome(live: Live, prefs: SharedPreferences) {
         val linked = withContext(Dispatchers.IO) { runCatching { hub.home().optString("homeId").takeIf { it.isNotEmpty() && it != "null" } }.getOrNull() }
         val mine = runCatching { Account.homes() }.getOrDefault(emptyList())
         when {
-            linked != null && mine.any { it.id == linked } -> { prefs.edit().putString("homeLinked", linked).apply(); home = mine.first { it.id == linked } }
+            linked != null && mine.any { it.id == linked } -> {
+                prefs.edit().putString("homeLinked", linked).apply()
+                val h = mine.first { it.id == linked }
+                home = h
+                if (h.roleOf(user.uid) == "owner") withContext(Dispatchers.IO) { runCatching { hub.cameraAccess() }.getOrNull() }
+                    ?.takeIf { it != h.camera }?.let { a -> runCatching { Account.setCamera(h, a) } }
+            }
             linked != null -> other = true   // another account's house: ask its owner for an invite
             else -> {
                 home = mine.firstOrNull { it.roleOf(user.uid) == "owner" } ?: runCatching {

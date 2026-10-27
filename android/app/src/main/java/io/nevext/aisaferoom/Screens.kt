@@ -1372,6 +1372,27 @@ private fun CreateCameraPassword(live: Live) {
     var typed by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
+    var created by remember { mutableStateOf<String?>(null) }   // the new password, shown once with a copy button
+    val context = LocalContext.current
+    created?.let { pw ->
+        androidx.compose.material3.AlertDialog(onDismissRequest = { created = null },
+            title = { Text("Senha da câmera criada") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("A câmera agora só aceita quem tem a senha. O app, a TV e a família continuam funcionando sem digitar nada.", fontSize = 13.sp)
+                    Text(pw, fontSize = 26.sp, fontWeight = FontWeight.Bold, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), textAlign = TextAlign.Center)
+                    Text("Ela fica guardada na sua conta. Para ver de novo: Câmera → ⚙ → A própria câmera → Senha da câmera. Só o app da marca (iCSee) vai pedir.",
+                        color = palette.muted, fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    context.getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(android.content.ClipData.newPlainText("senha", pw))
+                    created = null
+                }) { Text("Copiar e fechar") }
+            })
+    }
     if (later) return
     Row(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette, selected = true).clickable { open = true }.padding(14.dp),
         verticalAlignment = Alignment.CenterVertically) {
@@ -1411,7 +1432,12 @@ private fun CreateCameraPassword(live: Live) {
                 busy = true; note = null
                 scope.launch {
                     withContext(Dispatchers.IO) { runCatching { val r = hub.setCameraPassword(password); if (!r.optBoolean("ok")) throw java.io.IOException(r.optString("error", "a câmera recusou")); hub.screen() } }
-                        .onSuccess { live.info = it; open = false; later = true; live.problem = null }
+                        .onSuccess {
+                            live.info = it; open = false; later = true; live.problem = null; created = password
+                            // The account keeps the camera's login: the family's phones open it with the new password
+                            runCatching { Account.homes().firstOrNull { h -> h.roleOf(Account.user?.uid) == "owner" }?.let { h ->
+                                withContext(Dispatchers.IO) { runCatching { hub.cameraAccess() }.getOrNull() }?.let { a -> Account.setCamera(h, a) } } }
+                        }
                         .onFailure { note = "Não deu: ${it.message}" }
                     busy = false
                 }

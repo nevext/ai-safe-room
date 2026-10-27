@@ -140,7 +140,8 @@ export function createDrive({ file, sources, log = () => {} }) {
   function info() {
     return { ok: true, configured: configured(), connected: connected(), enabled: !!cfg.enabled, email: cfg.email || null,
       pending: pending && Date.now() < pending.until ? { userCode: pending.userCode, url: pending.url } : null,
-      uploaded: Object.keys(cfg.uploaded).length, keepDays: KEEP_DAYS, error: lastError, busy };
+      uploaded: Object.keys(cfg.uploaded).length, keepDays: KEEP_DAYS, error: lastError, busy,
+      folderUrl: cfg.folders['/AI Safe Room'] ? `https://drive.google.com/drive/folders/${cfg.folders['/AI Safe Room']}` : null };
   }
   async function set(b) {
     if (b.connect) { const r = await connect(); return { ...info(), ...r }; }

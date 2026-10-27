@@ -132,6 +132,13 @@ fun StorageScreen(live: Live, onBack: () -> Unit) {
                 else -> {
                     Text(if (i.optBoolean("enabled")) "${i.optInt("uploaded")} arquivos no Drive · ficam ${i.optInt("keepDays", 30)} dias${if (i.optBoolean("busy")) " · enviando…" else ""}"
                         else "Pausado: nada novo vai para o Drive.", color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                    // A shortcut to the folder in the Drive (the pictures and clips, by camera and day)
+                    i.optString("folderUrl").takeIf { it.startsWith("https://") }?.let { url ->
+                        Button(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } },
+                            colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().padding(top = 10.dp).height(48.dp)) {
+                            Text("Abrir as fotos e os clipes no Drive")
+                        }
+                    }
                     if (live.owner) TextButton(onClick = { change(JSONObject().put("disconnect", true)) }, modifier = Modifier.padding(top = 4.dp)) {
                         Text("Desconectar (o que já foi fica no Drive)", color = palette.muted, fontSize = 13.sp)
                     }
