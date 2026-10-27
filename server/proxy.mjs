@@ -2159,10 +2159,14 @@ async function who(req, prefixed) {
 async function linkHome(req, prefixed, b) {
   const token = bearer(req), homeId = String(b.homeId || '');
   if (!token || !homeId) return { ok: false, error: 'entre com o Google no app primeiro' };
-  const here = await who(req, prefixed);
-  if (here?.role !== 'owner' && !passwordOk(b.password)) return { ok: false, error: 'senha do computador', needPassword: true };
   const owner = await ownerOf(token, homeId);
   if (!owner) return { ok: false, error: 'só um dono da casa liga o computador a ela' };
+  // A prova de que a casa é dona desta câmera: o número de série e o login que a casa guarda batem com os daqui.
+  // Sem isso, quem já é dono aqui (ou sabe a senha do computador) também liga.
+  const c = owner.home.camera || {};
+  const sameCamera = !!cam.info.serial && c.serial === cam.info.serial && c.user === cam.user && (c.pass ?? '') === (cam.pass ?? '');
+  const here = await who(req, prefixed);
+  if (!sameCamera && here?.role !== 'owner' && !passwordOk(b.password)) return { ok: false, error: 'senha do computador', needPassword: true };
   access.homeId = homeId;
   saveState();
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Computador ligado à casa "${owner.home.name || 'Casa'}" de ${owner.email}`);

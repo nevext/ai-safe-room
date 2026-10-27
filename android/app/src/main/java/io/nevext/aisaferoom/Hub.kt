@@ -119,6 +119,10 @@ class Hub(val root: String, val key: String?) {
     fun log(lines: List<String>) { json("$base/api/applog", JSONObject().put("device", android.os.Build.MODEL).put("lines", JSONArray(lines)).toString(), timeoutMs = 5_000) }
     /** The house this computer belongs to (the account's), and linking it: owners only, or with the computer's password. */
     fun home(): JSONObject = json("$base/api/home")
+    /** The camera's address and login, from the computer (for the house in the account). */
+    fun cameraAccess(): CameraLink.Access = json("$base/api/camera/access").let { a ->
+        CameraLink.Access(a.getString("addr"), a.optString("user", "admin"), a.optString("pass"), a.optString("serial"), a.optString("name", "Câmera"), a.optBoolean("twoLenses"))
+    }
     fun linkHome(homeId: String, password: String?): JSONObject =
         json("$base/api/home/link", JSONObject().put("homeId", homeId).put("password", password ?: JSONObject.NULL).toString(), allowError = true)
     fun summaries(): JSONArray = json("$base/api/summaries").optJSONArray("days") ?: JSONArray()

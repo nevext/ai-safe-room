@@ -61,15 +61,7 @@ fun LoginScreen(onSignedIn: () -> Unit) {
             Text("Suas câmeras, sua família, sua casa.", color = palette.muted, fontSize = 14.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 8.dp))
         }
-        Spacer(Modifier.height(48.dp))
-        Column(Modifier.fillMaxWidth().card(palette).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Por que entrar com o Google", fontWeight = FontWeight.SemiBold)
-            listOf(
-                "Você continua dono da casa mesmo trocando ou reinstalando o celular.",
-                "A família entra pelo convite que você manda para o e-mail de cada um.",
-                "Sem senha nova para decorar.",
-            ).forEach { Text("•  $it", color = palette.muted, fontSize = 13.sp) }
-        }
+        Spacer(Modifier.height(64.dp))
         Button(enabled = !busy, onClick = {
             busy = true; error = null
             scope.launch {
@@ -150,10 +142,22 @@ fun LinkHome(live: Live, prefs: SharedPreferences) {
     var error by remember { mutableStateOf<String?>(null) }
     var home by remember { mutableStateOf<Home?>(null) }
     val link: suspend (String?) -> Unit = { pass ->
-        val h = home!!
+        var h = home!!
+        // The camera goes into the house (then any phone opens it without the computer, and it proves the house owns it)
+        if (h.roleOf(user.uid) == "owner") withContext(Dispatchers.IO) { runCatching { hub.cameraAccess() } }.getOrNull()?.let { a ->
+            runCatching { Account.setCamera(h, a) }.onSuccess { h = h.copy(camera = a); home = h }
+        }
         val r = withContext(Dispatchers.IO) { runCatching { hub.linkHome(h.id, pass) }.getOrElse { JSONObject().put("error", it.message) } }
         when {
-            r.optBoolean("ok") -> { prefs.edit().putString("homeLinked", h.id).apply(); ask = false; error = null; runCatching { Account.setHub(h, hub.root, live.info?.optJSONObject("camera")?.optString("serial")) } }
+            r.optBoolean("ok") -> {
+                prefs.edit().putString("homeLinked", h.id).apply(); ask = false; error = null
+                runCatching { Account.setHub(h, hub.root, live.info?.optJSONObject("camera")?.optString("serial")) }
+                // The role from the account right away (not at the next 30 s refresh)
+                withContext(Dispatchers.IO) { runCatching { hub.screen() }.getOrNull() }?.let { info ->
+                    live.info = info
+                    info.optJSONObject("me")?.optString("role")?.ifEmpty { null }?.let { live.role = it; prefs.edit().putString("role", it).apply() }
+                }
+            }
             r.optBoolean("needPassword") -> { ask = true; if (pass != null) error = "Senha errada. São os 8 números do computador." }
             else -> error = r.optString("error", "não deu")
         }

@@ -22,7 +22,9 @@ import java.util.concurrent.TimeUnit
  * The person's account: "Entrar com o Google" into Firebase Auth, and their house in Firestore.
  *
  * homes/{id}: { name, owners: [uid] (até 2), uids: [uid] (todos), members: { uid: { role, name, email, until } },
- *               hub: { root, serial } }   — the computer and camera of the house
+ *               hub: { root, serial },     — the computer (only for the AI)
+ *               camera: { addr, user, pass, serial, name, twoLenses } }   — the camera itself: any phone of the house
+ *                                           talks to it straight, without the computer (only the house reads it)
  * invites/{homeId}_{email}: { homeId, homeName, email, role, hours, by, byName, at }   — the owner's invite by e-mail
  *
  * Who may do what is in firestore.rules (the owners change the house; an invited person only adds themselves, with
@@ -75,6 +77,12 @@ object Account {
             "hub" to mapOf("root" to root, "serial" to serial), "at" to FieldValue.serverTimestamp())
         doc.set(data).await()
         return Home.from(doc.id, data)!!
+    }
+
+    /** The camera in the house: every phone of the family opens it straight from here (no computer needed). */
+    suspend fun setCamera(home: Home, a: CameraLink.Access) {
+        db.collection("homes").document(home.id).update("camera", mapOf("addr" to a.addr, "user" to a.user, "pass" to a.pass,
+            "serial" to a.serial, "name" to a.name, "twoLenses" to a.twoLenses)).await()
     }
 
     suspend fun setHub(home: Home, root: String?, serial: String?) {
@@ -138,7 +146,8 @@ object Account {
 
 data class Member(val uid: String, val role: String, val name: String, val email: String, val until: Long?)
 
-data class Home(val id: String, val name: String, val owners: List<String>, val members: Map<String, Member>, val root: String?, val serial: String?) {
+data class Home(val id: String, val name: String, val owners: List<String>, val members: Map<String, Member>, val root: String?, val serial: String?,
+                val camera: CameraLink.Access? = null) {
     fun roleOf(uid: String?): String? = uid?.let { members[it]?.role }
     companion object {
         @Suppress("UNCHECKED_CAST")
@@ -148,7 +157,11 @@ data class Home(val id: String, val name: String, val owners: List<String>, val 
                 Member(uid, m["role"] as? String ?: "member", m["name"] as? String ?: "", m["email"] as? String ?: "", (m["until"] as? Number)?.toLong())
             }
             val hub = data["hub"] as? Map<String, Any?>
-            return Home(id, data["name"] as? String ?: "Casa", (data["owners"] as? List<String>).orEmpty(), members, hub?.get("root") as? String, hub?.get("serial") as? String)
+            val c = data["camera"] as? Map<String, Any?>
+            val camera = c?.get("addr")?.let { CameraLink.Access(it as String, c["user"] as? String ?: "admin", c["pass"] as? String ?: "",
+                c["serial"] as? String ?: "", c["name"] as? String ?: "Câmera", c["twoLenses"] as? Boolean ?: false) }
+            return Home(id, data["name"] as? String ?: "Casa", (data["owners"] as? List<String>).orEmpty(), members, hub?.get("root") as? String,
+                hub?.get("serial") as? String, camera)
         }
     }
 }

@@ -213,10 +213,9 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 live.connected = false
                 live.problem = "Sem conexão com o computador"
             }
-            if (first) {
-                first = false
-                if (screen == Screen.Splash) { delay(600); screen = tab }
-            }
+            // Out of "Conectando" as soon as the computer answered (also when that happened behind the login screen)
+            if (screen == Screen.Splash && live.info != null) { if (first) delay(600); screen = tab }
+            first = false
             delay(30_000)
         }
     }
@@ -299,11 +298,14 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
         val route: () -> Unit = {
             scope.launch {
                 val invites = runCatching { Account.myInvites() }.getOrDefault(emptyList())
-                val home = if (invites.isEmpty()) runCatching { Account.homes() }.getOrDefault(emptyList()).firstOrNull { it.root != null } else null
+                val home = if (invites.isEmpty()) runCatching { Account.homes() }.getOrDefault(emptyList()).firstOrNull { it.camera != null || it.root != null } else null
+                // The house's camera comes from the account: this phone opens it straight, even new and without the computer
+                home?.camera?.let { CameraLink.get(activity).remember(it) }
                 screen = when {
                     invites.isNotEmpty() -> Screen.Invites(invites)
-                    live.hub != null -> Screen.Splash
-                    home != null -> { keep(Hub(home.root!!, null)); Screen.Splash }
+                    live.hub != null -> if (live.info != null) tab else Screen.Splash
+                    home?.root != null -> { keep(Hub(home.root, null)); Screen.Splash }
+                    home?.camera != null -> { keep(Hub(Hub.CAMERA_ONLY, null)); Screen.Splash }
                     else -> Screen.Find
                 }
             }
@@ -312,7 +314,12 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             Screen.Splash -> SplashScreen()
             Screen.Login -> LoginScreen(onSignedIn = route)
             is Screen.Invites -> InvitesScreen(s.list, onJoined = { home ->
-                if (home.root != null) keep(Hub(home.root, null)) else screen = Screen.Find
+                home.camera?.let { CameraLink.get(activity).remember(it) }
+                when {
+                    home.root != null -> keep(Hub(home.root, null))
+                    home.camera != null -> keep(Hub(Hub.CAMERA_ONLY, null))
+                    else -> screen = Screen.Find
+                }
             }, onSkip = { screen = if (live.hub != null) Screen.Splash else Screen.Find })
             Screen.Find -> {
                 // Opened from "+" with a computer already connected: back returns to the app
