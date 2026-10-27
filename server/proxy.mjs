@@ -2443,6 +2443,13 @@ const server = http.createServer(async (req, res) => {
       case '/api/talk': return talk(req, res);
       case '/api/ai': return json(res, 200, req.method === 'POST' ? setAi(await readBody(req)) : aiInfo());
       case '/api/summaries': return json(res, 200, { ok: true, days: summaries() });
+      // O registro do vídeo de um celular (o que o player fez), para ver um problema que só acontece no aparelho real
+      case '/api/applog': {
+        const b = await readBody(req);
+        const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 300).map(l => `${new Date().toLocaleTimeString('pt-BR')} [${String(b.device || me.name).slice(0, 30)}] ${String(l).slice(0, 300)}`);
+        fs.appendFile(path.join(HERE, 'applog.log'), lines.map(l => l + '\n').join(''), () => {});
+        return json(res, 200, { ok: true });
+      }
       case '/api/drive': return json(res, 200, req.method === 'POST' ? await drive.set(await readBody(req)) : drive.info());
       case '/api/diagnose': return json(res, 200, await diagnose((await readBody(req)).what));
       case '/api/screen/direct-stream': {

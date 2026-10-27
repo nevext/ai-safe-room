@@ -115,6 +115,8 @@ class Hub(val root: String, val key: String?) {
     /** Google Drive: connected or not, the code to sign in while it waits, how much went up. */
     fun drive(): JSONObject = json("$base/api/drive")
     fun setDrive(body: JSONObject): JSONObject = json("$base/api/drive", body.toString(), timeoutMs = 20_000)
+    /** The video's log (SharedVideo.note) to camera-ai, to see what a real phone did. */
+    fun log(lines: List<String>) { json("$base/api/applog", JSONObject().put("device", android.os.Build.MODEL).put("lines", JSONArray(lines)).toString(), timeoutMs = 5_000) }
     fun summaries(): JSONArray = json("$base/api/summaries").optJSONArray("days") ?: JSONArray()
     /** "wifi", "ai" or "camera": takes some seconds. */
     fun diagnose(what: String): JSONObject = json("$base/api/diagnose", JSONObject().put("what", what).toString(), timeoutMs = 120_000)

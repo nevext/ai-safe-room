@@ -216,6 +216,16 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
         }
     }
 
+    // The video's log goes to the computer every few seconds (to see what happened on this phone)
+    LaunchedEffect(live.hub, visible) {
+        val h = live.hub ?: return@LaunchedEffect
+        while (visible) {
+            delay(5000)
+            val lines = generateSequence { SharedVideo.log.poll() }.take(200).toList()
+            if (lines.isNotEmpty()) withContext(Dispatchers.IO) { runCatching { h.log(lines) } }
+        }
+    }
+
     // The AI's detections, the camera's motion and new activities, as they happen
     DisposableEffect(live.hub, visible) {
         val h = live.hub

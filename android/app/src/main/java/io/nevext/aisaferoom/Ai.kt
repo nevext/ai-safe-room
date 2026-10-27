@@ -88,6 +88,23 @@ object SharedVideo {
     private var url: String? = null
     private var users = 0
     var aspect = 1.5f; private set
+    /**
+     * The light video (sub) instead of the big one: decided once for the app (this phone's decoder, or the big one kept
+     * stalling). Before, each screen decided again from scratch, picked the big one, and the camera reopened.
+     */
+    var light: Boolean? = null
+    /** This player already drew a picture: changing screens shows it at once, never "Abrindo a câmera" again. */
+    var rendered by androidx.compose.runtime.mutableStateOf(false); private set
+    private val started = android.os.SystemClock.elapsedRealtime()
+    private var firstFrameAt = 0L
+    /** How long this player has shown pictures: the first seconds always stutter a little (not a reason to go light). */
+    fun playingFor(): Long = if (rendered) android.os.SystemClock.elapsedRealtime() - firstFrameAt else 0
+    /** What happened to the video, sent to camera-ai (Hub.log) so a problem on a real phone can be seen. */
+    val log = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    fun note(what: String) {
+        log.add("${(android.os.SystemClock.elapsedRealtime() - started) / 100 / 10.0}s $what")
+        while (log.size > 300) log.poll()
+    }
     /** What's playing now: a screen that opens picks it up at once, without asking anything. */
     val current: String? get() = url
     /** Already showing the picture: a screen that opens draws it from its first frame, no "Abrindo a câmera" flash. */
@@ -101,7 +118,7 @@ object SharedVideo {
      * its way out and the camera went black until it reloaded).
      */
     private val textures = mutableListOf<TextureView>()
-    fun attach(t: TextureView) { textures.remove(t); textures.add(t); player?.setVideoTextureView(t) }
+    fun attach(t: TextureView) { textures.remove(t); textures.add(t); player?.setVideoTextureView(t); note("tela nova pega o vídeo (${textures.size} telas)") }
     fun detach(t: TextureView) {
         val top = textures.lastOrNull() == t
         textures.remove(t)
@@ -118,7 +135,8 @@ object SharedVideo {
     fun acquire(context: android.content.Context, u: String): ExoPlayer {
         handler.removeCallbacks(releaseLater)
         users++
-        player?.takeIf { url == u }?.let { return it }
+        player?.takeIf { url == u }?.let { note("reusa o player (${if (u.contains("stream=1")) "leve" else "grande"}, ${stateName(it.playbackState)})"); return it }
+        note("abre o player ${if (u.contains("stream=1")) "leve" else "grande"}${if (player != null) " (troca de vídeo)" else ""}")
         reset()
         url = u
         // Little reserve to start (live, not 8 s behind); waits 15 s for the camera before giving up (a Wi-Fi burst
@@ -131,6 +149,9 @@ object SharedVideo {
             playWhenReady = true
             addListener(object : Player.Listener {
                 override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
+                override fun onRenderedFirstFrame() { if (!rendered) { note("primeiro quadro"); firstFrameAt = android.os.SystemClock.elapsedRealtime() }; rendered = true }
+                override fun onPlaybackStateChanged(state: Int) { note("player: ${stateName(state)}") }
+                override fun onPlayerError(error: PlaybackException) { note("erro: ${error.errorCodeName} ${error.message}") }
             })
             prepare()
             textures.lastOrNull()?.let { setVideoTextureView(it) }
@@ -140,7 +161,8 @@ object SharedVideo {
         users = (users - 1).coerceAtLeast(0)
         if (users == 0) { handler.removeCallbacks(releaseLater); handler.postDelayed(releaseLater, 60_000) }
     }
-    fun reset() { player?.release(); player = null; url = null }
+    fun reset() { if (player != null) note("fecha o player"); player?.release(); player = null; url = null; rendered = false }
+    private fun stateName(s: Int) = when (s) { Player.STATE_READY -> "tocando"; Player.STATE_BUFFERING -> "carregando"; Player.STATE_ENDED -> "acabou"; else -> "parado" }
 }
 
 /**
@@ -166,14 +188,13 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     val hub = live.hub ?: return
     val context = LocalContext.current
     var url by remember(hub) { mutableStateOf(SharedVideo.current) }
-    var playing by remember { mutableStateOf(SharedVideo.showing) }
+    var playing by remember { mutableStateOf(SharedVideo.showing || SharedVideo.rendered) }
     var drawn by remember { mutableStateOf(false) }   // this screen's own picture already showed its first frame
     var failed by remember { mutableStateOf(false) }
     var attempt by remember { mutableIntStateOf(0) }
     var aspect by remember { mutableStateOf(1.5f) }
-    var light by remember(hub) { mutableStateOf<Boolean?>(null) }   // the light video (sub): the phone can't keep up with the big one
     var stalls by remember { mutableIntStateOf(0) }
-    LaunchedEffect(hub, visible, attempt, light) {
+    LaunchedEffect(hub, visible, attempt) {
         // The camera's address is kept on the phone: the plain camera is phone and camera only, it doesn't wait for the
         // computer (busy with a game, off). The computer is asked in the background, in case the address changed.
         if (visible && url == null) url = withContext(Dispatchers.IO) {
@@ -182,7 +203,7 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
             val fresh = if (kept != null && attempt == 0) null
                 else runCatching { hub.directStream().also { prefs.edit().putSecret("directStream", it.toString()).apply() } }.getOrNull()
             val s = fresh ?: kept ?: return@withContext null
-            val useLight = light ?: !decodesBig(s.optInt("width", 3072), s.optInt("height", 2048)).also { light = !it }
+            val useLight = SharedVideo.light ?: !decodesBig(s.optInt("width", 3072), s.optInt("height", 2048)).also { SharedVideo.light = !it; SharedVideo.note(if (it) "celular aguenta o grande" else "celular usa o leve") }
             s.optString(if (useLight) "sub" else "main").ifEmpty { null }
         }
         if (attempt == 0 && visible) launch(Dispatchers.IO) {
@@ -198,17 +219,19 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     var texture by remember { mutableStateOf<TextureView?>(null) }
     DisposableEffect(player) {
         val p = player ?: return@DisposableEffect onDispose {}
-        playing = p.playbackState == Player.STATE_READY
+        playing = p.playbackState == Player.STATE_READY || SharedVideo.rendered
         aspect = SharedVideo.aspect
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) { playing = true; failed = false }
                 // Stopping to wait for video again and again: the big one is too much here, go light
-                if (state == Player.STATE_BUFFERING && playing && light == false && ++stalls >= 3) { light = true; url = null; attempt++ }
+                if (state == Player.STATE_BUFFERING && playing && SharedVideo.light == false && SharedVideo.playingFor() > 10_000 && ++stalls >= 3) {
+                    SharedVideo.note("o grande travou 3 vezes: passa para o leve"); SharedVideo.light = true; url = null; attempt++
+                }
             }
             override fun onPlayerError(error: PlaybackException) { playing = false; failed = true; url = null }   // the password may have changed
-            override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
             override fun onRenderedFirstFrame() { drawn = true }
+            override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
         }
         p.addListener(listener)
         onDispose {
@@ -224,6 +247,11 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         if (player == null || t == null) return@DisposableEffect onDispose {}
         SharedVideo.attach(t)
         onDispose { SharedVideo.detach(t) }
+    }
+    LaunchedEffect(player, texture) {
+        if (player == null || texture == null || drawn) return@LaunchedEffect
+        delay(700)
+        if (SharedVideo.rendered) drawn = true
     }
     // The last picture is kept every few seconds (the camera list and the next screen show it at once)
     LaunchedEffect(player, texture) {
