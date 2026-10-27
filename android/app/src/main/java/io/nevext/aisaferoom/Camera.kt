@@ -133,6 +133,7 @@ fun RoomSound(hub: Hub, on: Boolean) {
             while (running) {
                 runCatching {
                     val c = URL(hub.audioUrl).openConnection() as HttpURLConnection
+                    Hub.authorize(c)
                     connection = c
                     c.readTimeout = 10_000
                     c.inputStream.use { input ->
@@ -209,6 +210,7 @@ fun sendVoice(hub: Hub, read: (ByteArray, Int, Int) -> Int, running: () -> Boole
     val direct = CameraLink.current()?.takeIf { CameraLink.direct && it.access != null }
     if (direct != null) { direct.talk(read, running); return }
     val c = URL(hub.talkUrl).openConnection() as HttpURLConnection
+    Hub.authorize(c)
     c.requestMethod = "POST"; c.doOutput = true; c.setChunkedStreamingMode(640)
     c.setRequestProperty("content-type", "application/octet-stream")
     c.outputStream.use { out ->

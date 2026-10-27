@@ -21,6 +21,7 @@ import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
 import { createClips } from './clips.mjs';
 import { createDrive } from './drive.mjs';
+import { accountOf, ownerOf } from './account.mjs';
 import { createProfiles } from './perfil.mjs';
 import { loadFaces, createPeople, pose, similarity, outfit, outfitSimilarity, hasColor, SAME_PERSON } from './faces.mjs';
 
@@ -2144,9 +2145,28 @@ function deviceOf(k) {
 }
 const knownKey = (k) => !!deviceOf(k);
 // Quem está pedindo: o próprio PC é dono
-function who(req, prefixed) {
+// A conta Google do app (Authorization: Bearer <token do Firebase>): o papel vem da casa no Firestore
+const bearer = (req) => /^Bearer\s+(\S+)$/.exec(req.headers.authorization || '')?.[1];
+async function who(req, prefixed) {
   if (fromThisPc(req)) return { id: null, name: 'Este computador', role: 'owner' };
-  return deviceOf(prefixed?.[1]) || deviceOf(cookieKey(req)) || deviceOf(req.headers['x-key']);
+  const device = deviceOf(prefixed?.[1]) || deviceOf(cookieKey(req)) || deviceOf(req.headers['x-key']);
+  const account = bearer(req) && access.homeId ? await accountOf(bearer(req), access.homeId) : null;
+  // O aparelho e a conta: vale o papel maior (o celular que era membro e cuja conta é dona da casa é dono)
+  const rank = (w) => ({ owner: 3, member: 2, guest: 1 })[w?.role] || 0;
+  return rank(account) > rank(device) ? account : device || account;
+}
+// Ligar este PC à casa (da conta Google de um dono): quem pede precisa já ser dono aqui, ou saber a senha do PC
+async function linkHome(req, prefixed, b) {
+  const token = bearer(req), homeId = String(b.homeId || '');
+  if (!token || !homeId) return { ok: false, error: 'entre com o Google no app primeiro' };
+  const here = await who(req, prefixed);
+  if (here?.role !== 'owner' && !passwordOk(b.password)) return { ok: false, error: 'senha do computador', needPassword: true };
+  const owner = await ownerOf(token, homeId);
+  if (!owner) return { ok: false, error: 'só um dono da casa liga o computador a ela' };
+  access.homeId = homeId;
+  saveState();
+  console.log(`${new Date().toLocaleTimeString('pt-BR')} Computador ligado à casa "${owner.home.name || 'Casa'}" de ${owner.email}`);
+  return { ok: true, homeId };
 }
 function devicesInfo(me) {
   return { ok: true, maxOwners: MAX_OWNERS, devices: access.devices.map(({ id, name, role, until, at, lastSeen }) =>
@@ -2175,7 +2195,7 @@ function setRole(id, role, hours, me) {
   return { ok: true, ...devicesInfo(me) };
 }
 // O que cada papel pode. Dono: tudo. Convidado: só ver, ouvir e falar.
-const GUEST_OK = new Set(['/api/me', '/api/applog', '/api/screen', '/api/screen/video', '/api/screen/audio', '/api/screen/events', '/api/screen/thumb',
+const GUEST_OK = new Set(['/api/me', '/api/home', '/api/applog', '/api/screen', '/api/screen/video', '/api/screen/audio', '/api/screen/events', '/api/screen/thumb',
   '/api/screen/direct-stream', '/api/state', '/api/snapshot', '/api/talk', '/api/connection', '/api/stream', '/api/audio']);
 const MEMBER_POST_OK = new Set(['/api/applog', '/api/screen/control', '/api/ptz', '/api/talk', '/api/connection', '/api/follow', '/api/daynight']);
 const MEMBER_CONTROLS = new Set(['ircut', 'night', 'light', 'camTrack', 'follow']);
@@ -2386,7 +2406,7 @@ const server = http.createServer(async (req, res) => {
     // Sem chave, só fora da Proteção: senão alguém na rede pausaria a IA de 20 em 20 s e a Proteção ficaria cega
     // (teste de segurança, 26/10). A TV pareada manda a chave.
     if (u.pathname === '/api/screen/direct' && req.method === 'POST') {
-      const keyed = fromThisPc(req) || knownKey(prefixed?.[1]) || knownKey(cookieKey(req)) || knownKey(req.headers['x-key']);
+      const keyed = fromThisPc(req) || knownKey(prefixed?.[1]) || knownKey(cookieKey(req)) || knownKey(req.headers['x-key']) || !!(await who(req, prefixed));
       if (protection.on && !keyed) return json(res, 401, { error: 'com a Proteção ligada, precisa da chave' });
       return json(res, 200, setDirectWatch(!!(await readBody(req)).watching));
     }
@@ -2395,7 +2415,8 @@ const server = http.createServer(async (req, res) => {
       if (r.key) res.setHeader('set-cookie', `camkey=${r.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
       return json(res, 200, r);
     }
-    const me = who(req, prefixed);
+    if (u.pathname === '/api/home/link' && req.method === 'POST') return json(res, 200, await linkHome(req, prefixed, await readBody(req)));
+    const me = await who(req, prefixed);
     if (!me) {
       if (u.pathname.startsWith('/api/')) return json(res, 401, { error: 'senha', login: '/api/login' });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -2498,6 +2519,7 @@ const server = http.createServer(async (req, res) => {
       }
       case '/api/privacy': return json(res, 200, req.method === 'POST' ? await setPrivacy((await readBody(req)).on) : { ok: true, ...privacy });
       case '/api/me': return json(res, 200, { ok: true, id: me.id, name: me.name, role: me.role, until: me.until || null });
+      case '/api/home': return json(res, 200, { ok: true, homeId: access.homeId || null });
       case '/api/devices': return json(res, 200, devicesInfo(me));
       case '/api/devices/remove': return json(res, 200, removeDevice((await readBody(req)).id, me));
       case '/api/devices/role': { const b = await readBody(req); return json(res, 200, setRole(b.id, b.role, b.hours, me)); }

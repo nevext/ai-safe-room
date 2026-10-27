@@ -1,5 +1,6 @@
 package io.nevext.aisaferoom
 
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.ui.platform.LocalContext
 import android.graphics.BitmapFactory
 import android.os.Build
@@ -826,10 +827,26 @@ private fun ActivityDetail(hub: Hub, a: JSONObject, onClose: () -> Unit, onLive:
 // MARK: - Ajustes
 
 @Composable
-fun SettingsScreen(role: String, onOpen: (Screen) -> Unit) {
+fun SettingsScreen(role: String, onOpen: (Screen) -> Unit, onSignOut: () -> Unit) {
     val owner = role == "owner"
+    var leaving by remember { mutableStateOf(false) }
     Page {
         PageTitle("Ajustes", "Personalize e gerencie seu sistema")
+        Account.user?.let { u ->
+            Row(Modifier.fillMaxWidth().padding(bottom = 14.dp).card(palette).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconBubble(Icons.Outlined.Person)
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(u.displayName ?: "Sua conta", fontWeight = FontWeight.SemiBold)
+                    Text(u.email ?: "", color = palette.muted, fontSize = 12.sp)
+                }
+                TextButton(onClick = { leaving = true }) { Text("Sair", color = palette.muted) }
+            }
+        }
+        if (leaving) androidx.compose.material3.AlertDialog(onDismissRequest = { leaving = false },
+            title = { Text("Sair da conta?") },
+            text = { Text("Este celular para de ver as câmeras até entrar de novo com o Google. A casa e a família continuam.") },
+            confirmButton = { TextButton(onClick = { leaving = false; onSignOut() }) { Text("Sair", color = Red) } },
+            dismissButton = { TextButton(onClick = { leaving = false }) { Text("Cancelar") } })
         if (!owner) RoleCard(role)
         if (owner || role == "member") Column(Modifier.fillMaxWidth().card(palette)) {
             if (owner) {

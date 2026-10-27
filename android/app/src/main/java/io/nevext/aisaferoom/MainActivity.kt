@@ -21,11 +21,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -37,6 +39,8 @@ import kotlin.concurrent.thread
 sealed interface Screen {
     data object Splash : Screen
     data object Find : Screen
+    data object Login : Screen
+    data class Invites(val list: List<Map<String, Any?>>) : Screen
     data class LetIn(val root: String) : Screen
     data object Home : Screen
     data object Cameras : Screen
@@ -159,7 +163,8 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             role = prefs.getString("role", "owner") ?: "owner"
         }
     }
-    var screen by remember { mutableStateOf<Screen>(if (live.hub == null) Screen.Find else Screen.Splash) }
+    var screen by remember { mutableStateOf<Screen>(if (Account.user == null) Screen.Login else if (live.hub == null) Screen.Find else Screen.Splash) }
+    val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf<Screen>(Screen.Home) }
     var fullscreen by remember { mutableStateOf<String?>(null) }   // the view shown full screen, if any
     var previous by remember { mutableStateOf<Screen>(Screen.Home) }   // where back goes from a screen opened over another
@@ -196,7 +201,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 if (act != null) live.activity = act
                 live.problem = null
             }.onFailure {
-                if (it is Locked) { screen = Screen.LetIn(h.root); return@LaunchedEffect }
+                if (it is Locked) { if (screen != Screen.Login) screen = Screen.LetIn(h.root); return@LaunchedEffect }
                 // At home it's the Wi-Fi address; away, the one set in Conexão (and back again)
                 val home = prefs.getString("root", null)
                 val other = if (h.root == home) prefs.getString("remote", null) else home
@@ -290,8 +295,25 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                     androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(220)) { it / 14 }) togetherWith
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120))
             }) { s ->
+        // After signing in: an invite waiting, the house's computer, or finding the camera
+        val route: () -> Unit = {
+            scope.launch {
+                val invites = runCatching { Account.myInvites() }.getOrDefault(emptyList())
+                val home = if (invites.isEmpty()) runCatching { Account.homes() }.getOrDefault(emptyList()).firstOrNull { it.root != null } else null
+                screen = when {
+                    invites.isNotEmpty() -> Screen.Invites(invites)
+                    live.hub != null -> Screen.Splash
+                    home != null -> { keep(Hub(home.root!!, null)); Screen.Splash }
+                    else -> Screen.Find
+                }
+            }
+        }
         when (s) {
             Screen.Splash -> SplashScreen()
+            Screen.Login -> LoginScreen(onSignedIn = route)
+            is Screen.Invites -> InvitesScreen(s.list, onJoined = { home ->
+                if (home.root != null) keep(Hub(home.root, null)) else screen = Screen.Find
+            }, onSkip = { screen = if (live.hub != null) Screen.Splash else Screen.Find })
             Screen.Find -> {
                 // Opened from "+" with a computer already connected: back returns to the app
                 if (h != null) BackHandler(onBack = back)
@@ -301,13 +323,14 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             is Screen.LetIn -> LetInScreen(s.root, onKey = { keep(Hub(s.root, it)) }, onCamera = { keep(Hub(Hub.CAMERA_ONLY, null)) },
                 onBack = { screen = Screen.Find })
             Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, live.unseen, onTab = { tab = it; screen = it }) {
+                LinkHome(live, prefs)
                 when (s) {
                     Screen.Home -> HomeScreen(live, visible && fullscreen == null, onCamera = { open(Screen.Camera) }, onSystem = { open(Screen.System) },
                         onActivity = { tab = Screen.Activity; screen = Screen.Activity }, onFullscreen = { fullscreen = "whole" },
                         onProtection = { open(Screen.Protection) }, onAi = { open(Screen.Ai) })
                     Screen.Cameras -> CamerasScreen(live, onCamera = { open(Screen.Camera) }, onAdd = { open(Screen.Find) })
                     Screen.Activity -> if (live.guest) GuestNote() else ActivityScreen(live, onLive = { open(Screen.Camera) }, onSummaries = { open(Screen.Summaries) })
-                    else -> SettingsScreen(live.role, onOpen = open)
+                    else -> SettingsScreen(live.role, onOpen = open, onSignOut = { Account.signOut(); forget(); screen = Screen.Login })
                 }
             }
             Screen.Camera -> if (h != null) {

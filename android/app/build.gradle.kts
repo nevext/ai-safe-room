@@ -17,8 +17,8 @@ android {
         applicationId = "io.nevext.aisaferoom"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.2.10"
+        versionCode = 13
+        versionName = "0.3.0"
     }
 
     signingConfigs {
@@ -58,4 +58,12 @@ dependencies {
     // The camera's own video, direct over RTSP (the app without the AI, like the TV)
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.5.1")
+    // The account: Entrar com o Google (Credential Manager) into Firebase Auth; the house and the family in Firestore
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 }

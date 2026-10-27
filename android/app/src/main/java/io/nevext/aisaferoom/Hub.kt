@@ -117,6 +117,10 @@ class Hub(val root: String, val key: String?) {
     fun setDrive(body: JSONObject): JSONObject = json("$base/api/drive", body.toString(), timeoutMs = 20_000)
     /** The video's log (SharedVideo.note) to camera-ai, to see what a real phone did. */
     fun log(lines: List<String>) { json("$base/api/applog", JSONObject().put("device", android.os.Build.MODEL).put("lines", JSONArray(lines)).toString(), timeoutMs = 5_000) }
+    /** The house this computer belongs to (the account's), and linking it: owners only, or with the computer's password. */
+    fun home(): JSONObject = json("$base/api/home")
+    fun linkHome(homeId: String, password: String?): JSONObject =
+        json("$base/api/home/link", JSONObject().put("homeId", homeId).put("password", password ?: JSONObject.NULL).toString(), allowError = true)
     fun summaries(): JSONArray = json("$base/api/summaries").optJSONArray("days") ?: JSONArray()
     /** "wifi", "ai" or "camera": takes some seconds. */
     fun diagnose(what: String): JSONObject = json("$base/api/diagnose", JSONObject().put("what", what).toString(), timeoutMs = 120_000)
@@ -390,8 +394,12 @@ class Hub(val root: String, val key: String?) {
             }
         }
 
+        /** The person's Google account goes with every request to camera-ai (it reads their role in the house). */
+        fun authorize(c: HttpURLConnection) { if (!c.url.host.startsWith("0.")) Account.token()?.let { c.setRequestProperty("Authorization", "Bearer $it") } }
+
         private fun open(url: String, body: String?, timeoutMs: Int): HttpURLConnection {
             val c = URL(url).openConnection() as HttpURLConnection
+            authorize(c)
             c.connectTimeout = 4000
             c.readTimeout = timeoutMs
             if (body != null) {
@@ -431,6 +439,7 @@ class Mjpeg(private val url: String, private val onFrame: (ByteArray) -> Unit, p
         while (running) {
             try {
                 val c = URL(url).openConnection() as HttpURLConnection
+                Hub.authorize(c)
                 c.connectTimeout = 4000
                 c.readTimeout = 10_000
                 conn = c

@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// AI Safe Room: as casas, a família e os convites (Firebase do projeto ai-safe-room).
+// Os donos (até 2) mudam a casa; quem foi convidado só entra, com o papel do convite; cada um vê só as próprias casas.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function home(id) { return get(/databases/$(database)/documents/homes/$(id)).data; }
+
+    match /users/{uid} {
+      allow read, write: if signedIn() && me() == uid;
+    }
+
+    match /homes/{homeId} {
+      allow read: if signedIn() && me() in resource.data.uids;
+
+      // Criar uma casa: quem cria é o único dono e o único na casa
+      allow create: if signedIn()
+        && request.resource.data.owners == [me()]
+        && request.resource.data.uids == [me()]
+        && request.resource.data.members.keys().hasOnly([me()])
+        && request.resource.data.members[me()].role == 'owner';
+
+      allow update: if signedIn() && (ownerChange() || joining(homeId));
+      allow delete: if signedIn() && me() in resource.data.owners;
+
+      // Dono: muda tudo, mantendo de 1 a 2 donos e cada dono também na casa
+      function ownerChange() {
+        return me() in resource.data.owners
+          && request.resource.data.owners.size() >= 1
+          && request.resource.data.owners.size() <= 2
+          && request.resource.data.uids.hasAll(request.resource.data.owners);
+      }
+
+      // Convidado entrando: só se põe na casa, com o papel do convite (dono só se o convite for de dono e couber)
+      function joining(homeId) {
+        let inv = get(/databases/$(database)/documents/invites/$(homeId + '_' + myEmail())).data;
+        let added = request.resource.data.uids.toSet().difference(resource.data.uids.toSet());
+        return added == [me()].toSet()
+          && resource.data.uids.toSet().difference(request.resource.data.uids.toSet()).size() == 0
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uids', 'members', 'owners'])
+          && request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([me()])
+          && request.resource.data.members[me()].role == inv.role
+          && (inv.role == 'owner'
+              ? request.resource.data.owners.toSet() == resource.data.owners.toSet().union([me()].toSet())
+                && request.resource.data.owners.size() <= 2
+              : request.resource.data.owners == resource.data.owners);
+      }
+    }
+
+    // Convite: o id é <casa>_<email>. O dono cria e cancela; a pessoa convidada lê e apaga (ao aceitar ou recusar).
+    match /invites/{inviteId} {
+      allow read: if signedIn() && (resource.data.email == myEmail() || me() in home(resource.data.homeId).owners);
+      allow create: if signedIn()
+        && me() in home(request.resource.data.homeId).owners
+        && inviteId == request.resource.data.homeId + '_' + request.resource.data.email
+        && request.resource.data.role in ['owner', 'member', 'guest'];
+      allow delete: if signedIn() && (resource.data.email == myEmail() || me() in home(resource.data.homeId).owners);
+    }
+  }
+}

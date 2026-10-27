@@ -187,6 +187,7 @@ fun FamilyScreen(live: Live, onBack: () -> Unit) {
     Page {
         TopBar("", null, onBack)
         PageTitle("Família e aparelhos", "Quem tem acesso e o que cada um pode")
+        FamilyAccounts(live)
         Column(Modifier.fillMaxWidth().padding(bottom = 12.dp).card(palette).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ROLES.forEach { (_, name, what) ->
                 Text(buildString { append(name); append(": "); append(what) }, color = palette.muted, fontSize = 12.sp)
