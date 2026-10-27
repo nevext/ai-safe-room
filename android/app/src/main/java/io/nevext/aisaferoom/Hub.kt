@@ -280,6 +280,34 @@ class Hub(val root: String, val key: String?) {
             runCatching { found.putAll(ask(wifi, mine, waitMs).associateBy { it.root }) }
             // The computer answered the ask: it's enough (it holds the camera). Else knock on every address (~3 s)
             if (found.isEmpty()) mine?.let { knock(wifi, it.address as Inet4Address) }?.forEach { f -> found[f.root] = f }
+            // XM cameras say their serial to anyone on the Wi-Fi (no password): it tells whose house the camera is
+            runCatching { xmSearch(wifi, mine) }.getOrDefault(emptyList()).forEach { f -> found[f.root] = f }
+            return found.values.toList()
+        }
+
+        /** The XM search (port 34569): each camera answers with its NetCommon, serial included. ~1 s. */
+        private fun xmSearch(wifi: Network?, mine: LinkAddress?): List<Found> {
+            val found = LinkedHashMap<String, Found>()
+            DatagramSocket(null).use { s ->
+                s.reuseAddress = true
+                s.bind(InetSocketAddress(34569))
+                wifi?.let { n -> runCatching { n.bindSocket(s) } }
+                s.broadcast = true
+                s.soTimeout = 250
+                val ask = ByteArray(20).also { it[0] = 0xff.toByte(); it[14] = (1530 and 0xff).toByte(); it[15] = (1530 shr 8).toByte() }
+                listOfNotNull(InetAddress.getByName("255.255.255.255"), mine?.let { broadcastOf(it) })
+                    .forEach { t -> runCatching { s.send(DatagramPacket(ask, ask.size, t, 34569)) } }
+                val buf = ByteArray(4096)
+                val end = System.currentTimeMillis() + 1200
+                while (System.currentTimeMillis() < end) {
+                    val p = DatagramPacket(buf, buf.size)
+                    try { s.receive(p) } catch (e: SocketTimeoutException) { continue }
+                    if (p.length <= 20 || ((buf[15].toInt() and 0xff) shl 8 or (buf[14].toInt() and 0xff)) != 1531) continue
+                    val net = runCatching { JSONObject(String(buf, 20, p.length - 20).trimEnd('\u0000', '\n')).optJSONObject("NetWork.NetCommon") }.getOrNull() ?: continue
+                    val host = p.address.hostAddress ?: continue
+                    found[host] = Found(host, net.optString("SN").ifEmpty { null }, camera = true)
+                }
+            }
             return found.values.toList()
         }
 

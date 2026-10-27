@@ -59,5 +59,30 @@ service cloud.firestore {
         && request.resource.data.role in ['owner', 'member', 'guest'];
       allow delete: if signedIn() && (resource.data.email == myEmail() || me() in home(resource.data.homeId).owners);
     }
+
+    // De quem é a câmera: o id é a série que ela anuncia só no Wi-Fi. Lê quem sabe a série (um por vez, sem listar);
+    // só um dono da casa aponta a câmera para a casa (e só um dono da casa antiga muda).
+    match /cameras/{serial} {
+      allow get: if signedIn();
+      allow create: if signedIn() && me() in home(request.resource.data.homeId).owners;
+      allow update: if signedIn() && me() in home(request.resource.data.homeId).owners
+        && (resource.data.homeId == request.resource.data.homeId || me() in home(resource.data.homeId).owners);
+      allow delete: if signedIn() && me() in home(resource.data.homeId).owners;
+    }
+
+    // Pedido para entrar: o id é <casa>_<uid>. O celular novo pede (sabendo a série da câmera da casa, ou seja, no
+    // Wi-Fi dela); um dono responde (e ele mesmo põe a pessoa na casa). Quem pediu vê a resposta e pode desistir.
+    match /joins/{joinId} {
+      allow read: if signedIn() && (resource.data.uid == me() || me() in home(resource.data.homeId).owners);
+      allow create: if signedIn()
+        && request.resource.data.uid == me()
+        && joinId == request.resource.data.homeId + '_' + me()
+        && request.resource.data.status == 'pending'
+        && get(/databases/$(database)/documents/cameras/$(request.resource.data.serial)).data.homeId == request.resource.data.homeId;
+      allow update: if signedIn() && me() in home(resource.data.homeId).owners
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'role'])
+        && request.resource.data.status in ['ok', 'no'];
+      allow delete: if signedIn() && (resource.data.uid == me() || me() in home(resource.data.homeId).owners);
+    }
   }
 }

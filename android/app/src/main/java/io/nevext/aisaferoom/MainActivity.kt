@@ -42,6 +42,7 @@ sealed interface Screen {
     data object Login : Screen
     data class Invites(val list: List<Map<String, Any?>>) : Screen
     data class LetIn(val root: String) : Screen
+    data class Join(val house: House) : Screen
     data object Home : Screen
     data object Cameras : Screen
     data object Activity : Screen
@@ -167,7 +168,8 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
     val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf<Screen>(Screen.Home) }
     var fullscreen by remember { mutableStateOf<String?>(null) }   // the view shown full screen, if any
-    var previous by remember { mutableStateOf<Screen>(Screen.Home) }   // where back goes from a screen opened over another
+    var previous by remember { mutableStateOf<Screen>(Screen.Home) }
+    var skipHouses by remember { mutableStateOf(false) }   // "configurar a minha própria câmera": don't ask to join again   // where back goes from a screen opened over another
     val activity = LocalContext.current as Activity
 
     val keep = { h: Hub ->
@@ -310,27 +312,31 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 }
             }
         }
+        // In the house (an invite, or the owner let this phone in): its camera, straight or through the computer
+        val joined: (Home) -> Unit = { home ->
+            home.camera?.let { CameraLink.get(activity).remember(it) }
+            when {
+                home.root != null -> keep(Hub(home.root, null))
+                home.camera != null -> keep(Hub(Hub.CAMERA_ONLY, null))
+                else -> screen = Screen.Find
+            }
+        }
         when (s) {
             Screen.Splash -> SplashScreen()
             Screen.Login -> LoginScreen(onSignedIn = route)
-            is Screen.Invites -> InvitesScreen(s.list, onJoined = { home ->
-                home.camera?.let { CameraLink.get(activity).remember(it) }
-                when {
-                    home.root != null -> keep(Hub(home.root, null))
-                    home.camera != null -> keep(Hub(Hub.CAMERA_ONLY, null))
-                    else -> screen = Screen.Find
-                }
-            }, onSkip = { screen = if (live.hub != null) Screen.Splash else Screen.Find })
+            is Screen.Invites -> InvitesScreen(s.list, onJoined = joined, onSkip = { screen = if (live.hub != null) Screen.Splash else Screen.Find })
+            is Screen.Join -> JoinScreen(s.house, onJoined = joined, onOwn = { skipHouses = true; screen = Screen.Find })
             Screen.Find -> {
                 // Opened from "+" with a computer already connected: back returns to the app
                 if (h != null) BackHandler(onBack = back)
                 FindScreen(onFound = { root, inside -> if (inside) keep(Hub(root, null)) else screen = Screen.LetIn(root) },
-                    onCamera = { keep(Hub(Hub.CAMERA_ONLY, null)) }, onBack = if (h != null) back else null)
+                    onCamera = { keep(Hub(Hub.CAMERA_ONLY, null)) }, onHouse = if (skipHouses) null else ({ screen = Screen.Join(it) }), onBack = if (h != null) back else null)
             }
             is Screen.LetIn -> LetInScreen(s.root, onKey = { keep(Hub(s.root, it)) }, onCamera = { keep(Hub(Hub.CAMERA_ONLY, null)) },
                 onBack = { screen = Screen.Find })
             Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, live.unseen, onTab = { tab = it; screen = it }) {
                 LinkHome(live, prefs)
+                JoinRequests()
                 when (s) {
                     Screen.Home -> HomeScreen(live, visible && fullscreen == null, onCamera = { open(Screen.Camera) }, onSystem = { open(Screen.System) },
                         onActivity = { tab = Screen.Activity; screen = Screen.Activity }, onFullscreen = { fullscreen = "whole" },

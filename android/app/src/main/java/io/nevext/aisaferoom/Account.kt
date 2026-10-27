@@ -14,6 +14,7 @@ import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.tasks.await
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -26,6 +27,9 @@ import java.util.concurrent.TimeUnit
  *               camera: { addr, user, pass, serial, name, twoLenses } }   — the camera itself: any phone of the house
  *                                           talks to it straight, without the computer (only the house reads it)
  * invites/{homeId}_{email}: { homeId, homeName, email, role, hours, by, byName, at }   — the owner's invite by e-mail
+ * cameras/{serial}: { homeId, homeName, ownerName }   — whose house a camera is (its serial is said only on the Wi-Fi)
+ * joins/{homeId}_{uid}: { homeId, serial, uid, name, email, device, status, role, at }   — a new phone asking to come in;
+ *                                           an owner says yes (and puts the person in the house) or no
  *
  * Who may do what is in firestore.rules (the owners change the house; an invited person only adds themselves, with
  * the role of the invite). camera-ai reads the same house with the person's token to know their role.
@@ -83,6 +87,60 @@ object Account {
     suspend fun setCamera(home: Home, a: CameraLink.Access) {
         db.collection("homes").document(home.id).update("camera", mapOf("addr" to a.addr, "user" to a.user, "pass" to a.pass,
             "serial" to a.serial, "name" to a.name, "twoLenses" to a.twoLenses)).await()
+        claimCamera(home, a.serial)
+    }
+
+    /** Owners: the camera's serial points to the house, so a new phone on the Wi-Fi can ask to come in. */
+    suspend fun claimCamera(home: Home, serial: String?) {
+        if (serial.isNullOrEmpty()) return
+        val ownerName = home.members[user?.uid]?.name?.substringBefore(' ').orEmpty()
+        db.collection("cameras").document(serial).set(mapOf("homeId" to home.id, "homeName" to home.name, "ownerName" to ownerName)).await()
+    }
+
+    /** Whose house a camera found on the Wi-Fi is (by the serial it announces), or null. */
+    suspend fun houseOf(serial: String): House? = runCatching {
+        db.collection("cameras").document(serial).get().await().data?.let { d ->
+            House(serial, d["homeId"] as? String ?: return null, d["homeName"] as? String ?: "Casa", d["ownerName"] as? String ?: "")
+        }
+    }.getOrNull()
+
+    /** A new phone asks the owners to come in (the rules check it knows the camera's serial: it is on the Wi-Fi). */
+    suspend fun askToJoin(house: House, device: String) {
+        val u = user ?: throw IOException("Entre com o Google primeiro.")
+        val ref = db.collection("joins").document("${house.homeId}_${u.uid}")
+        runCatching { ref.delete().await() }   // an old answer: ask again
+        ref.set(mapOf("homeId" to house.homeId, "serial" to house.serial, "uid" to u.uid, "name" to (u.displayName ?: email), "email" to email,
+            "device" to device, "status" to "pending", "at" to FieldValue.serverTimestamp())).await()
+    }
+
+    /** This phone's request to [homeId], as it changes ("pending", "ok", "no"; null: none). */
+    fun watchMyJoin(homeId: String, onChange: (String?) -> Unit): ListenerRegistration? {
+        val u = user ?: return null
+        return db.collection("joins").document("${homeId}_${u.uid}").addSnapshotListener { s, _ -> onChange(s?.getString("status")) }
+    }
+
+    suspend fun cancelJoin(homeId: String) { user?.let { db.collection("joins").document("${homeId}_${it.uid}").delete().await() } }
+
+    /** Owners: the phones asking to come in to [home], as they arrive. */
+    fun watchJoins(home: Home, onChange: (List<Join>) -> Unit): ListenerRegistration =
+        db.collection("joins").whereEqualTo("homeId", home.id).whereEqualTo("status", "pending").addSnapshotListener { s, _ ->
+            onChange(s?.documents.orEmpty().map { d ->
+                Join(d.id, home.id, d.getString("uid") ?: "", d.getString("name") ?: "", d.getString("email") ?: "", d.getString("device") ?: "")
+            })
+        }
+
+    /** Owners: let the person in with a role (they're put in the house here), or say no. */
+    suspend fun answerJoin(home: Home, j: Join, allow: Boolean, role: String = "member", hours: Int = 0) {
+        val ref = db.collection("joins").document(j.id)
+        if (!allow) { ref.update(mapOf("status" to "no")).await(); return }
+        val fresh = Home.from(home.id, db.collection("homes").document(home.id).get().await().data) ?: throw IOException("A casa não abriu.")
+        if (role == "owner" && fresh.owners.size >= 2) throw IOException("Já tem 2 donos.")
+        val member = mutableMapOf<String, Any?>("role" to role, "name" to j.name, "email" to j.email)
+        if (role == "guest") member["until"] = System.currentTimeMillis() + hours * 3600_000L
+        val updates = mutableMapOf<String, Any>("uids" to FieldValue.arrayUnion(j.uid), "members.${j.uid}" to member)
+        if (role == "owner") updates["owners"] = FieldValue.arrayUnion(j.uid)
+        db.collection("homes").document(home.id).update(updates).await()
+        ref.update(mapOf("status" to "ok", "role" to role)).await()
     }
 
     suspend fun setHub(home: Home, root: String?, serial: String?) {
@@ -143,6 +201,12 @@ object Account {
             "members.$uid" to FieldValue.delete())).await()
     }
 }
+
+/** A camera on the Wi-Fi that is already some house's. */
+data class House(val serial: String, val homeId: String, val homeName: String, val ownerName: String)
+
+/** A phone asking to come in: who (their Google) and which phone. */
+data class Join(val id: String, val homeId: String, val uid: String, val name: String, val email: String, val device: String)
 
 data class Member(val uid: String, val role: String, val name: String, val email: String, val until: Long?)
 

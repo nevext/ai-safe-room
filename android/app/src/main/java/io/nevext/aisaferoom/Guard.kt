@@ -13,6 +13,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
+import com.google.firebase.firestore.ListenerRegistration
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import java.util.Calendar
 import kotlin.concurrent.thread
@@ -22,7 +24,7 @@ import kotlin.concurrent.thread
  *
  * Alerts (sound, vibration, the photo; shown on the lock screen): someone in the room while Protection is on (with the
  * name when the face is known, one per visit), an animal (if the house has animals), the camera offline or covered,
- * a device asking to come in (Permitir / Recusar right there). Quiet notices: the day's summary, a weak connection (at
+ * a device asking to come in, to the computer or to the house's account (Permitir / Recusar right there). Quiet notices: the day's summary, a weak connection (at
  * most every 6 h), Protection turned on or off by its schedule. Fixed: "De olho na casa", with Protection's state.
  *
  * With the computer reachable (home Wi-Fi or the address from outside) it listens to it; with it away, straight to the
@@ -44,12 +46,14 @@ class Guard : Service() {
             running = true
             thread(name = "guard", isDaemon = true) { listen() }
             thread(name = "summary", isDaemon = true) { summaries() }
+            thread(name = "joins", isDaemon = true) { watchJoins() }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         running = false
+        joinRegs.forEach { it.remove() }
         super.onDestroy()
     }
 
@@ -151,6 +155,31 @@ class Guard : Service() {
         val id = r.optString("id")
         alert(id.hashCode(), "${r.optString("name")} quer entrar", "Pediu acesso às câmeras (${r.optString("ip")}). Só permita se for de casa.", null,
             actions = listOf(action("allow", "Permitir", id.hashCode(), "id" to id), action("deny", "Recusar", id.hashCode(), "id" to id)))
+    }
+
+    // MARK: - A new phone asking to come in (through the account: works without the computer)
+
+    @Volatile private var joinRegs = emptyList<ListenerRegistration>()
+    private val shownJoins = mutableSetOf<String>()
+
+    private fun watchJoins() {
+        val uid = Account.user?.uid ?: return
+        val homes = runCatching { runBlocking { Account.homes() } }.getOrDefault(emptyList()).filter { it.roleOf(uid) == "owner" }
+        joinRegs = homes.map { h ->
+            Account.watchJoins(h) { list ->
+                val nm = getSystemService(NotificationManager::class.java)
+                // Answered (here or on another owner's phone): the notification goes
+                shownJoins.filter { id -> id.startsWith(h.id + "_") && list.none { it.id == id } }.forEach { nm.cancel(it.hashCode()); shownJoins -= it }
+                list.filter { it.id !in shownJoins }.forEach { j ->
+                    shownJoins += j.id
+                    if (!on("notifyAccess")) return@forEach
+                    val who = j.name.ifEmpty { j.email }
+                    val extras = arrayOf("homeId" to h.id, "joinId" to j.id, "uid" to j.uid, "name" to j.name, "email" to j.email, "device" to j.device)
+                    alert(j.id.hashCode(), "$who quer entrar", "${j.email}, pelo ${j.device}, no Wi-Fi da câmera. Só permita se for de casa.", null,
+                        actions = listOf(action("joinAllow", "Permitir", j.id.hashCode(), *extras), action("joinDeny", "Recusar", j.id.hashCode(), *extras)))
+                }
+            }
+        }
     }
 
     /** Once a day (21:00): how the day went. */
@@ -295,6 +324,12 @@ class NotifyActions : BroadcastReceiver() {
                 val hub = Guard.reachable(context)
                 when (intent.action) {
                     "allow", "deny" -> hub?.answerAccess(intent.getStringExtra("id") ?: "", intent.action == "allow")
+                    // From the notification: as a member (the role changes later in Família)
+                    "joinAllow", "joinDeny" -> runBlocking {
+                        val x = { k: String -> intent.getStringExtra(k) ?: "" }
+                        val h = Account.homes().first { it.id == x("homeId") }
+                        Account.answerJoin(h, Join(x("joinId"), h.id, x("uid"), x("name"), x("email"), x("device")), intent.action == "joinAllow")
+                    }
                     "mistake" -> hub?.forget(intent.getStringExtra("at")?.toLongOrNull() ?: 0, intent.getStringExtra("type") ?: "person")
                     "pause" -> hub?.pauseProtection(60) ?: run { CameraLink.get(context).protection = false }
                     "on", "off" -> {

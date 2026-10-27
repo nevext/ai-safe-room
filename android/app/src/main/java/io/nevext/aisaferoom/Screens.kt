@@ -1148,7 +1148,7 @@ fun FeaturesScreen(live: Live, onBack: () -> Unit, onZones: () -> Unit) {
 // MARK: - Achar o computador e entrar
 
 @Composable
-fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () -> Unit, onBack: (() -> Unit)? = null) {
+fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () -> Unit, onHouse: ((House) -> Unit)?, onBack: (() -> Unit)? = null) {
     val context = LocalContext.current
     var searching by remember { mutableStateOf(true) }
     var found by remember { mutableStateOf<List<Found>>(emptyList()) }
@@ -1189,6 +1189,13 @@ fun FindScreen(onFound: (root: String, inside: Boolean) -> Unit, onCamera: () ->
         found = withContext(Dispatchers.IO) { runCatching { Hub.discover(context) }.getOrDefault(emptyList()) }
         searching = false
         found.firstOrNull { !it.camera }?.let { context.getSharedPreferences("aisaferoom", android.content.Context.MODE_PRIVATE).edit().putString("pcSeen", it.root).apply() }
+        // A camera that is already someone's house: ask its owners to come in (no password, no computer)
+        if (onHouse != null) {
+            val mine = runCatching { Account.homes().map { it.id } }.getOrDefault(emptyList())
+            found.mapNotNull { it.serial }.distinct().firstNotNullOfOrNull { Account.houseOf(it) }?.takeIf { it.homeId !in mine }?.let {
+                onHouse(it); return@LaunchedEffect
+            }
+        }
         // The computer if there is one (it has the AI too); else the camera straight, like its own app
         val pcs = found.filter { !it.camera }
         val cams = found.filter { it.camera }

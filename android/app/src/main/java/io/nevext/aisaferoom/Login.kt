@@ -123,6 +123,108 @@ fun InvitesScreen(invites: List<Map<String, Any?>>, onJoined: (Home) -> Unit, on
 
 private val ROLE_TEXT = mapOf("owner" to "dono", "member" to "membro", "guest" to "convidado")
 
+// MARK: - Pedir para entrar (celular novo no Wi-Fi da câmera)
+
+/** The camera on this Wi-Fi is someone's house: ask its owners, wait, and come in when they say yes. */
+@Composable
+fun JoinScreen(house: House, onJoined: (Home) -> Unit, onOwn: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf<String?>(null) }   // null: not asked; "pending", "ok", "no"
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val whose = if (house.ownerName.isNotEmpty()) "da casa de ${house.ownerName}" else "de uma casa"
+    androidx.compose.runtime.DisposableEffect(house.homeId) {
+        val reg = Account.watchMyJoin(house.homeId) { status = it }
+        onDispose { reg?.remove() }
+    }
+    LaunchedEffect(status) {
+        if (status != "ok") return@LaunchedEffect
+        runCatching { Account.homes().first { it.id == house.homeId } }.onSuccess(onJoined)
+            .onFailure { error = "Permitiram, mas a casa não abriu. Feche e abra o app." }
+    }
+    Page {
+        Column(Modifier.fillMaxWidth().padding(top = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Logo(64.dp)
+            Text("Esta câmera é $whose", fontSize = 22.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
+            Text("Peça para entrar: um dono recebe o pedido no celular dele e toca em Permitir. Não precisa de senha nem do computador.",
+                color = palette.muted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+        }
+        Spacer(Modifier.height(24.dp))
+        when (status) {
+            "pending", "ok" -> Row(Modifier.fillMaxWidth().card(palette).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(18.dp), color = Blue, strokeWidth = 2.dp)
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(if (status == "ok") "Permitido! Entrando…" else "Esperando um dono permitir…", fontSize = 14.sp)
+                    if (status == "pending") Text("Pode fechar o app: quando permitirem, é só abrir de novo.", color = palette.muted, fontSize = 12.sp)
+                }
+                if (status == "pending") TextButton(onClick = { scope.launch { runCatching { Account.cancelJoin(house.homeId) } } }) { Text("Desistir", color = palette.muted) }
+            }
+            else -> {
+                if (status == "no") Text("O dono recusou este pedido. Se foi engano, peça de novo.", color = Red, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 10.dp))
+                Button(enabled = !busy, onClick = {
+                    busy = true; error = null
+                    scope.launch {
+                        runCatching { Account.askToJoin(house, "Celular " + android.os.Build.MODEL) }
+                            .onFailure { error = "Não deu para mandar o pedido: ${it.message}. Confira a internet e tente de novo." }
+                        busy = false
+                    }
+                }, colors = ButtonDefaults.buttonColors(containerColor = Blue), modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp) else Text("Pedir para entrar", fontSize = 16.sp)
+                }
+            }
+        }
+        error?.let { Text(it, color = Red, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 10.dp)) }
+        TextButton(onClick = onOwn, modifier = Modifier.padding(top = 12.dp)) { Text("Não é essa: configurar a minha própria câmera", color = palette.muted, fontSize = 13.sp) }
+    }
+}
+
+/**
+ * Owners, anywhere in the app: a phone asking to come in pops up with Permitir / Recusar (and the role). Also points the
+ * house's camera to the house, so new phones on the Wi-Fi find it.
+ */
+@Composable
+fun JoinRequests() {
+    val user = Account.user ?: return
+    val scope = rememberCoroutineScope()
+    var homes by remember { mutableStateOf<List<Home>>(emptyList()) }
+    var asking by remember { mutableStateOf<List<Pair<Home, Join>>>(emptyList()) }
+    var choosing by remember { mutableStateOf<Pair<Home, Join>?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(user.uid) {
+        homes = runCatching { Account.homes() }.getOrDefault(emptyList()).filter { it.roleOf(user.uid) == "owner" }
+        homes.forEach { h -> runCatching { Account.claimCamera(h, h.camera?.serial ?: h.serial) } }
+    }
+    androidx.compose.runtime.DisposableEffect(homes) {
+        val got = mutableMapOf<String, List<Join>>()
+        val regs = homes.map { h ->
+            Account.watchJoins(h) { list -> got[h.id] = list; asking = homes.flatMap { hh -> got[hh.id].orEmpty().map { hh to it } } }
+        }
+        onDispose { regs.forEach { it.remove() } }
+    }
+    val (h, j) = asking.firstOrNull() ?: return
+    val who = j.name.ifEmpty { j.email }
+    if (choosing == null) AlertDialog(onDismissRequest = {},
+        title = { Text("$who quer entrar") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("${j.email} pediu para entrar na casa \"${h.name}\" pelo ${j.device}, no Wi-Fi da câmera.", fontSize = 14.sp)
+                Text("Só permita se for alguém de casa.", color = palette.muted, fontSize = 13.sp)
+                error?.let { Text(it, color = Red, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+            }
+        },
+        confirmButton = { Button(onClick = { error = null; choosing = h to j }, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Permitir") } },
+        dismissButton = {
+            TextButton(onClick = { scope.launch { runCatching { Account.answerJoin(h, j, false) }.onFailure { error = it.message } } }) { Text("Recusar", color = palette.muted) }
+        })
+    choosing?.let { (ch, cj) ->
+        RoleChooser("Permitir $who como", ch.owners.size, null, onDismiss = { choosing = null }) { role, hours ->
+            choosing = null
+            scope.launch { runCatching { Account.answerJoin(ch, cj, true, role, hours) }.onFailure { error = "Não deu para permitir: ${it.message}" } }
+        }
+    }
+}
+
 // MARK: - A casa e o computador
 
 /**
