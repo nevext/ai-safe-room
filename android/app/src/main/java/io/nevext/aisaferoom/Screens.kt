@@ -1297,10 +1297,9 @@ fun LetInScreen(root: String, onKey: (String) -> Unit, onCamera: () -> Unit, onB
         }
         Text("Como liberar", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
         Column(Modifier.fillMaxWidth().card(palette).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("No computador (${root.removePrefix("http://").substringBefore(':')}): abriu uma página do AI Safe Room perguntando se este celular pode entrar. Toque em OK.\n" +
-                "Se não abriu, abra o navegador do computador em 127.0.0.1:8787.", fontSize = 13.sp)
-            Text("Ou num celular que já usa o AI Safe Room: chega uma notificação \"Celular ${Build.MODEL} quer entrar\". Toque em Permitir.",
-                fontSize = 13.sp, color = palette.muted)
+            Text("Um dono da casa recebe no celular a notificação \"Celular ${Build.MODEL} quer entrar\" e toca em Permitir. Aí este celular entra sozinho.",
+                fontSize = 13.sp)
+            Text("O primeiro celular da casa entra direto, sem pedir a ninguém: ele vira o dono.", fontSize = 13.sp, color = palette.muted)
         }
         Text(if (showPassword) "Esconder" else "Tenho a senha do computador", color = Blue, fontSize = 13.sp,
             modifier = Modifier.padding(top = 16.dp).clickable { showPassword = !showPassword })

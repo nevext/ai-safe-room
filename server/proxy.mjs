@@ -2196,12 +2196,14 @@ function accessRequest(req, name) {
   const r = { id: crypto.randomBytes(16).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), ip, at: Date.now(), status: 'pending' };
   requests.set(r.id, r);
   console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${ip}) pediu acesso: permita no navegador do PC ou do celular`);
-  broadcast({ type: 'access', item: { id: r.id, name: r.name, ip } });   // os celulares avisam, com Permitir e Recusar
-  // Primeiro celular (ninguém para tocar em Permitir): abre a página no próprio PC, com a pergunta
-  if (!owners() && Date.now() - (accessRequest.opened || 0) > 120000 && process.platform === 'win32') {
-    accessRequest.opened = Date.now();
-    spawn('cmd', ['/c', 'start', '', `http://127.0.0.1:${PORT}/`], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  // Primeiro aparelho, sem dono ainda (a instalação): entra direto como dono, como no pareamento de câmeras e
+  // lâmpadas. Daí em diante, quem aprova é o dono, pela notificação no celular dele.
+  if (!owners()) {
+    Object.assign(r, { status: 'ok', role: 'owner' });
+    console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${ip}) é o primeiro aparelho: entrou como dono`);
+    return { ok: true, id: r.id };
   }
+  broadcast({ type: 'access', item: { id: r.id, name: r.name, ip } });   // os celulares avisam, com Permitir e Recusar
   return { ok: true, id: r.id };
 }
 function accessStatus(id) {
