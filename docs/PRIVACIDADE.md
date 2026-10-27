@@ -49,6 +49,21 @@ basta) e não aponte a câmera para a casa de vizinhos. Quem trabalha na casa de
 - **Notificações**: para os avisos da Proteção, se você ligar.
 - **Microfone**: só enquanto você segura o botão de falar pela câmera.
 
+## Google Drive (opcional)
+
+Se você conectar o Google Drive (Ajustes → Armazenamento), o AI Safe Room envia as fotos das atividades e os clipes
+da sua câmera para uma pasta "AI Safe Room" no **seu** Drive, e apaga de lá o que passar de 30 dias.
+
+- O acesso pedido é só o escopo `drive.file`: o app vê e mexe **apenas nos arquivos que ele mesmo criou**. Ele não
+  lê, não lista e não apaga nenhum outro arquivo do seu Drive.
+- O login é feito por você, na sua conta Google; a autorização fica guardada só no computador de casa (o camera-ai),
+  nunca em servidor nosso.
+- Os dados do Google não são vendidos, não são usados para publicidade, nem para treinar IA, nem passados a
+  ninguém. O uso segue a [Política de dados do usuário dos serviços de API do Google](https://developers.google.com/terms/api-services-user-data-policy),
+  incluindo os requisitos de Uso Limitado.
+- Para desconectar: Ajustes → Armazenamento → Desconectar, ou em myaccount.google.com → Segurança → Apps de
+  terceiros. O que já foi enviado continua no seu Drive até você apagar.
+
 ## Seus direitos (art. 18)
 
 Você pode ver, corrigir e apagar os dados a qualquer momento, pelo próprio app (atividades com "Foi engano", pessoas
