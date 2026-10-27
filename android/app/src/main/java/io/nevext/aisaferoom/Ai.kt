@@ -257,7 +257,7 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     // The last picture is kept every few seconds (the camera list and the next screen show it at once)
     LaunchedEffect(player, texture) {
         while (player != null && texture != null) {
-            delay(3000)
+            delay(1000)
             if (playing && drawn) texture?.let { SharedVideo.keepFrame(it) }
         }
     }
@@ -294,6 +294,11 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         val (rw, rh) = if (wide == fit) maxWidth to maxWidth / region else maxHeight * region to maxHeight
         val fullH = rw / aspect
         val dy = when (view) { "top" -> (fullH - rh) / 2; "bottom" -> -(fullH - rh) / 2; else -> 0.dp }
+        // Under the video, always, the last picture: when the video leaves this screen it goes empty for a frame before
+        // the screen does, and the dark background flashed (one frame, seen recording the phone's screen, 26/10)
+        if (player != null) SharedVideo.lastFrame?.let {
+            Image(it, null, contentScale = ContentScale.FillBounds, modifier = Modifier.requiredSize(rw, fullH).offset(y = dy))
+        }
         if (player != null) AndroidView(factory = { TextureView(it).also { t -> texture = t } },
             modifier = Modifier.requiredSize(rw, fullH).offset(y = dy))
         // Changing screens: the last picture stays until this screen's first frame, instead of black
