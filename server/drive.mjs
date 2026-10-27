@@ -35,6 +35,7 @@ export function createDrive({ file, sources, log = () => {} }) {
     if (r.status !== 200) return { ok: false, error: r.body.error_description || r.body.error || `o Google respondeu ${r.status}` };
     const { device_code, user_code, verification_url, expires_in, interval } = r.body;
     pending = { userCode: user_code, url: verification_url, until: Date.now() + expires_in * 1000 };
+    lastError = null;
     // Espera a pessoa entrar, perguntando no ritmo que o Google pede
     (async () => {
       let wait = (interval || 5) * 1000;
