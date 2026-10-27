@@ -1299,7 +1299,7 @@ fun LetInScreen(root: String, onKey: (String) -> Unit, onCamera: () -> Unit, onB
         Column(Modifier.fillMaxWidth().card(palette).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Um dono da casa recebe no celular a notificação \"Celular ${Build.MODEL} quer entrar\" e toca em Permitir. Aí este celular entra sozinho.",
                 fontSize = 13.sp)
-            Text("O primeiro celular da casa entra direto, sem pedir a ninguém: ele vira o dono.", fontSize = 13.sp, color = palette.muted)
+            Text("Primeiro celular da casa: use a senha do computador, abaixo.", fontSize = 13.sp, color = palette.muted)
         }
         Text(if (showPassword) "Esconder" else "Tenho a senha do computador", color = Blue, fontSize = 13.sp,
             modifier = Modifier.padding(top = 16.dp).clickable { showPassword = !showPassword })
@@ -1401,4 +1401,40 @@ private fun CreateCameraPassword(live: Live) {
             }, colors = ButtonDefaults.buttonColors(containerColor = Blue)) { Text("Criar senha") }
         },
         dismissButton = { TextButton(enabled = !busy, onClick = { open = false; later = true }) { Text("Agora não", color = palette.muted) } })
+}
+
+/** One past day, from the days' summary: everything that happened, with the pictures (kept 30 days on the computer). */
+@Composable
+fun DayScreen(live: Live, day: String, at: Long, onBack: () -> Unit, onLive: () -> Unit) {
+    val hub = live.hub ?: return
+    val scope = rememberCoroutineScope()
+    var list by remember(day) { mutableStateOf(Kept.get<List<JSONObject>>("day$day")) }
+    var openedKey by remember { mutableStateOf<Pair<Long, String>?>(null) }
+    val reload: suspend () -> Unit = {
+        withContext(Dispatchers.IO) { runCatching { hub.activityOf(day).let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } } }.getOrNull() }
+            ?.let { list = it; Kept["day$day"] = it }
+    }
+    LaunchedEffect(day) { reload(); if (list == null) list = emptyList() }
+    LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 20.dp)) {
+        item {
+            TopBar("", null, onBack)
+            PageTitle(dayTitle(at), "Tudo o que aconteceu, com as fotos")
+        }
+        val items = list
+        if (items == null) item { Loading() }
+        else if (items.isEmpty()) item { Text("Nada neste dia.", color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 24.dp)) }
+        else items(items, key = { "a" + it.optLong("at") + it.optString("type") }) { a ->
+            ActivityRow(hub, a, isNew = false) { openedKey = a.optLong("at") to a.optString("type") }
+        }
+        item { Spacer(Modifier.height(20.dp)) }
+    }
+    val opened = openedKey?.let { (t, type) -> list?.find { it.optLong("at") == t && it.optString("type") == type } }
+    opened?.let { a ->
+        ActivityDetail(hub, a, onClose = { openedKey = null }, onLive = { openedKey = null; onLive() },
+            onChanged = { item -> list = list?.map { if (it.optLong("at") == item.optLong("at") && it.optString("type") == item.optString("type")) item else it } },
+            onMistake = {
+                openedKey = null
+                scope.launch { withContext(Dispatchers.IO) { runCatching { hub.forget(a.optLong("at"), a.optString("type")) } }; reload() }
+            })
+    }
 }

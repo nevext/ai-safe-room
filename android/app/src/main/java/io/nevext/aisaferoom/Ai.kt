@@ -6,6 +6,7 @@ import androidx.annotation.OptIn
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -94,6 +95,24 @@ object SharedVideo {
     /** The last picture the previous screen showed: the next one shows it until its first frame (no black flash). */
     var lastFrame: androidx.compose.ui.graphics.ImageBitmap? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    /**
+     * The screens' pictures, newest last: the player draws on the newest. Changing screens, the new one comes in before
+     * the old one goes; when the old goes, the picture stays on the new one (before, the old one could take it back on
+     * its way out and the camera went black until it reloaded).
+     */
+    private val textures = mutableListOf<TextureView>()
+    fun attach(t: TextureView) { textures.remove(t); textures.add(t); player?.setVideoTextureView(t) }
+    fun detach(t: TextureView) {
+        val top = textures.lastOrNull() == t
+        textures.remove(t)
+        if (top) textures.lastOrNull()?.let { player?.setVideoTextureView(it) }
+    }
+    /** A small copy of what's on [t] (for the next screen and the camera list), cheap enough for the UI thread. */
+    fun keepFrame(t: TextureView) {
+        if (t.width <= 0) return
+        val w = minOf(640, t.width)
+        runCatching { t.getBitmap(w, (w.toFloat() * t.height / t.width).toInt().coerceAtLeast(1)) }.getOrNull()?.let { lastFrame = it.asImageBitmap() }
+    }
     private val releaseLater = Runnable { if (users == 0) reset() }
 
     fun acquire(context: android.content.Context, u: String): ExoPlayer {
@@ -114,6 +133,7 @@ object SharedVideo {
                 override fun onVideoSizeChanged(size: VideoSize) { if (size.width > 0 && size.height > 0) aspect = size.width.toFloat() / size.height }
             })
             prepare()
+            textures.lastOrNull()?.let { setVideoTextureView(it) }
         }.also { player = it }
     }
     fun leave() {
@@ -193,17 +213,23 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         p.addListener(listener)
         onDispose {
             p.removeListener(listener)
-            // Not cleared here: the screen goes away anyway, and clearing first showed it black for a frame
-            texture?.let { t -> runCatching { t.bitmap?.asImageBitmap() }.getOrNull()?.let { SharedVideo.lastFrame = it } }
+            texture?.let { if (drawn) SharedVideo.keepFrame(it) }
             SharedVideo.leave()
             playing = false
         }
+    }
+    // This screen's picture joins the player (and leaves it to the screen underneath when it goes)
+    DisposableEffect(player, texture) {
+        val t = texture
+        if (player == null || t == null) return@DisposableEffect onDispose {}
+        SharedVideo.attach(t)
+        onDispose { SharedVideo.detach(t) }
     }
     // The last picture is kept every few seconds (the camera list and the next screen show it at once)
     LaunchedEffect(player, texture) {
         while (player != null && texture != null) {
             delay(3000)
-            if (playing && drawn) runCatching { texture?.bitmap?.asImageBitmap() }.getOrNull()?.let { SharedVideo.lastFrame = it }
+            if (playing && drawn) texture?.let { SharedVideo.keepFrame(it) }
         }
     }
     // The room's sound comes in the camera's own stream: just turn it up
@@ -239,7 +265,7 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
         val (rw, rh) = if (wide == fit) maxWidth to maxWidth / region else maxHeight * region to maxHeight
         val fullH = rw / aspect
         val dy = when (view) { "top" -> (fullH - rh) / 2; "bottom" -> -(fullH - rh) / 2; else -> 0.dp }
-        if (player != null) AndroidView(factory = { TextureView(it).also { t -> texture = t } }, update = { player.setVideoTextureView(it) },
+        if (player != null) AndroidView(factory = { TextureView(it).also { t -> texture = t } },
             modifier = Modifier.requiredSize(rw, fullH).offset(y = dy))
         // Changing screens: the last picture stays until this screen's first frame, instead of black
         if (playing && !drawn) SharedVideo.lastFrame?.let {
@@ -421,7 +447,7 @@ private val hourName = SimpleDateFormat("HH:mm", Locale.forLanguageTag("pt-BR"))
 
 /** The history of days: who came, how many visits, animals, movement; and the 21:00 notification. */
 @Composable
-fun SummariesScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
+fun SummariesScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit, onDay: (String, Long) -> Unit) {
     val hub = live.hub ?: return
     var days by remember { mutableStateOf(Kept.get<List<JSONObject>>("days")) }
     var notify by remember { mutableStateOf(prefs.getBoolean("summary", true)) }
@@ -446,8 +472,22 @@ fun SummariesScreen(live: Live, prefs: SharedPreferences, onBack: () -> Unit) {
         if (list == null) CircularProgressIndicator(Modifier.padding(24.dp).size(24.dp), color = Blue, strokeWidth = 2.dp)
         else if (list.isEmpty()) Text("Nada ainda.", color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(8.dp))
         list?.forEach { d ->
-            Column(Modifier.fillMaxWidth().padding(bottom = 10.dp).card(palette).padding(16.dp)) {
-                Text(dayName.format(Date(d.optLong("at"))).replaceFirstChar { it.uppercase() }, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Column(Modifier.fillMaxWidth().padding(bottom = 10.dp).card(palette).clickable { onDay(d.optString("day"), d.optLong("at")) }.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(dayName.format(Date(d.optLong("at"))).replaceFirstChar { it.uppercase() }, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                        modifier = Modifier.weight(1f))
+                    Text("Ver o dia ›", color = Blue, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                // The day's pictures: people and animals first
+                val thumbs = d.optJSONArray("thumbs")
+                if (thumbs != null && thumbs.length() > 0) Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (i in 0 until minOf(thumbs.length(), 4)) {
+                        val pic = rememberPicture(hub, hub.thumbUrl(thumbs.optString(i)))
+                        Box(Modifier.weight(1f).aspectRatio(16 / 10f).clip(RoundedCornerShape(8.dp)).background(Color(0xFF0B0F17))) {
+                            pic?.let { androidx.compose.foundation.Image(it, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                        }
+                    }
+                }
                 val people = d.optInt("people"); val visits = d.optInt("visits"); val animals = d.optInt("animals"); val moves = d.optInt("motions")
                 Text(listOfNotNull(
                     if (people == 0) "Ninguém apareceu" else "$visits ${if (visits == 1) "visita" else "visitas"} · até $people ${if (people == 1) "pessoa" else "pessoas"} juntas",

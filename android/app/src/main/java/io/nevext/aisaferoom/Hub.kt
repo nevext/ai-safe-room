@@ -143,6 +143,8 @@ class Hub(val root: String, val key: String?) {
 
     /** What happened: motion, people, camera online/offline, night vision, light (newest first). */
     fun activity(): JSONArray = json("$base/api/activity").optJSONArray("activity") ?: JSONArray()
+    /** Everything of one day ("2026-10-25"), newest first: the days' summary opens it with the pictures. */
+    fun activityOf(day: String): JSONArray = json("$base/api/activity?day=$day").optJSONArray("activity") ?: JSONArray()
 
     /** Names the camera ("Quarto"). */
     fun rename(name: String): JSONObject = json("$base/api/perfil", JSONObject().put("name", name).toString())

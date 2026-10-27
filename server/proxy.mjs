@@ -857,14 +857,17 @@ function setAi(b) {
 }
 
 // ---------- Resumo de cada dia (GET /api/summaries): o histórico dos últimos 30 dias ----------
+const dayKey = (at) => { const d = new Date(at); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 function summaries() {
   const days = new Map();
   for (const a of activity) {
     const d = new Date(a.at);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const key = dayKey(a.at);
     let s = days.get(key);
     if (!s) days.set(key, s = { day: key, at: new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(), visits: 0, people: 0,
-      names: new Set(), unknown: 0, animals: 0, motions: 0, alerts: 0, first: null, last: null });
+      names: new Set(), unknown: 0, animals: 0, motions: 0, alerts: 0, first: null, last: null, shots: [] });
+    // As fotos do dia: pessoas e animais antes, depois movimento com pessoa, depois o resto
+    if (a.thumb) s.shots.push({ thumb: a.thumb, rank: a.type === 'person' || a.type === 'animal' ? 0 : a.withPerson ? 1 : 2, at: a.at });
     if (a.type === 'person') {
       s.visits++; s.people = Math.max(s.people, a.people || 1);
       for (const n of a.names || []) s.names.add(n);
@@ -874,7 +877,8 @@ function summaries() {
     else if (a.type === 'motion') s.motions += a.count || 1;
     if (a.alert) s.alerts++;
   }
-  return [...days.values()].sort((a, b) => b.at - a.at).slice(0, 30).map(s => ({ ...s, names: [...s.names] }));
+  return [...days.values()].sort((a, b) => b.at - a.at).slice(0, 30).map(({ shots, ...s }) => ({ ...s, names: [...s.names],
+    thumbs: shots.sort((x, y) => x.rank - y.rank || y.at - x.at).slice(0, 6).map(x => x.thumb) }));
 }
 
 // ---------- Diagnóstico (POST /api/diagnose): a câmera, o Wi-Fi até ela, e ela até a IA ----------
@@ -1223,7 +1227,8 @@ async function cameraChecks() {
 
 // ---------- Atividades: o que aconteceu, para o app (GET /api/activity) ----------
 // Movimento (da câmera), pessoa chegando (da IA), câmera online/offline, visão noturna e luz. As de movimento e
-// pessoa levam uma miniatura (320 px, do snapshot HTTP: sem outra conexão de vídeo), guardada 7 dias no PC.
+// pessoa levam uma miniatura (320 px, do snapshot HTTP: sem outra conexão de vídeo), guardada 30 dias no PC (o
+// resumo dos dias mostra as fotos de cada dia).
 const ACT_DIR = path.join(HERE, 'atividades');
 fs.mkdirSync(ACT_DIR, { recursive: true });
 const ACT_FILE = path.join(ACT_DIR, 'atividades.json');
@@ -1252,7 +1257,7 @@ async function logActivity(type, text, { thumb = false, box = null, label = null
     setTimeout(() => decideAlert(entry), 20000);
   }
   if (thumb) entry.thumb = await activityThumb(type === 'person' || type === 'animal');
-  activity = [...activity, entry].slice(-500);
+  activity = [...activity, entry].slice(-20000);   // o limite de verdade são os 30 dias (abaixo)
   try { fs.writeFileSync(ACT_FILE, JSON.stringify(activity)); } catch {}
   broadcast({ type: 'activity', item: entry });   // a atividade vai em item: ela tem o próprio type (person, motion…)
   return entry;
@@ -1286,9 +1291,9 @@ async function aiFrameThumb({ frame, w, h }) {
   } catch { return null; }
 }
 
-// Miniaturas com mais de 7 dias saem
+// Miniaturas com mais de 30 dias saem
 setInterval(() => {
-  const old = Date.now() - 7 * 864e5;
+  const old = Date.now() - 30 * 864e5;
   for (const f of fs.readdirSync(ACT_DIR)) if (/^\d+(-f\d+)?\.jpg$/.test(f) && parseInt(f) < old) fs.rm(path.join(ACT_DIR, f), () => {});
   activity = activity.filter(a => a.at > Date.now() - 30 * 864e5);
   for (const at of Object.keys(visitFaces)) if (+at < old) delete visitFaces[at];
@@ -2196,13 +2201,6 @@ function accessRequest(req, name) {
   const r = { id: crypto.randomBytes(16).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), ip, at: Date.now(), status: 'pending' };
   requests.set(r.id, r);
   console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${ip}) pediu acesso: permita no navegador do PC ou do celular`);
-  // Primeiro aparelho, sem dono ainda (a instalação): entra direto como dono, como no pareamento de câmeras e
-  // lâmpadas. Daí em diante, quem aprova é o dono, pela notificação no celular dele.
-  if (!owners()) {
-    Object.assign(r, { status: 'ok', role: 'owner' });
-    console.log(`${new Date().toLocaleTimeString('pt-BR')} ${r.name} (${ip}) é o primeiro aparelho: entrou como dono`);
-    return { ok: true, id: r.id };
-  }
   broadcast({ type: 'access', item: { id: r.id, name: r.name, ip } });   // os celulares avisam, com Permitir e Recusar
   return { ok: true, id: r.id };
 }
@@ -2408,7 +2406,9 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, perfilInfo());
       }
-      case '/api/activity': return json(res, 200, { activity: activity.slice(-200).reverse() });
+      // ?day=2026-10-25: tudo daquele dia (o resumo dos dias abre o dia com as fotos)
+      case '/api/activity': return json(res, 200, { activity: u.searchParams.get('day')
+        ? activity.filter(a => dayKey(a.at) === u.searchParams.get('day')).reverse() : activity.slice(-200).reverse() });
       // O app guarda isto para falar com a câmera sozinho (sem o computador), como o app original dela; só para
       // aparelhos que já entraram (a senha da câmera já ia no endereço do vídeo direto)
       case '/api/camera/access': return cam.addr ? json(res, 200, { ok: true, addr: cam.addr, user: cam.user, pass: cam.pass, serial: cam.info.serial,

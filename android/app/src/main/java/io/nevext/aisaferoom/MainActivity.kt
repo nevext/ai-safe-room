@@ -55,6 +55,7 @@ sealed interface Screen {
     data object Ai : Screen
     data object Diagnostics : Screen
     data object Summaries : Screen
+    data class Day(val day: String, val at: Long) : Screen
     data object Notifications : Screen
     data object About : Screen
     data object Terms : Screen
@@ -343,7 +344,11 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             }
             Screen.Summaries -> if (h != null) {
                 BackHandler(onBack = back)
-                SummariesScreen(live, prefs, onBack = back)
+                SummariesScreen(live, prefs, onBack = back, onDay = { day, at -> screen = Screen.Day(day, at) })
+            }
+            is Screen.Day -> if (h != null) {
+                BackHandler { screen = Screen.Summaries }
+                DayScreen(live, s.day, s.at, onBack = { screen = Screen.Summaries }, onLive = { open(Screen.Camera) })
             }
             Screen.Protection -> if (h != null) {
                 BackHandler(onBack = back)
