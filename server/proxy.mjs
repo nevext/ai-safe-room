@@ -20,6 +20,7 @@ import { dvrip, xmHash } from './dvrip.mjs';
 import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
 import { createClips } from './clips.mjs';
+import { createDrive } from './drive.mjs';
 import { createProfiles } from './perfil.mjs';
 import { loadFaces, createPeople, pose, similarity, outfit, outfitSimilarity, hasColor, SAME_PERSON } from './faces.mjs';
 
@@ -1291,6 +1292,27 @@ async function aiFrameThumb({ frame, w, h }) {
   } catch { return null; }
 }
 
+// ---------- Google Drive (server/drive.mjs): as fotos e os clipes também no Drive da pessoa ----------
+const drive = createDrive({
+  file: path.join(HERE, 'drive.json'),
+  log: (m) => console.log(`${new Date().toLocaleTimeString('pt-BR')} ${m}`),
+  // O que existe para mandar: as fotos das atividades e os clipes, em AI Safe Room / <câmera> / <dia>
+  sources: () => {
+    const hhmm = (at) => new Date(at).toLocaleTimeString('pt-BR').replace(/:/g, '-');
+    const out = activity.filter(a => a.thumb).map(a => ({ path: path.join(ACT_DIR, a.thumb), at: a.at, mime: 'image/jpeg',
+      folders: ['AI Safe Room', a.camera || 'Câmera', dayKey(a.at)], name: `${hhmm(a.at)} ${a.text}.jpg`.replace(/[\/:*?"<>|]/g, '') }));
+    const dir = path.join(HERE, 'eventos');
+    for (const day of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      for (const f of fs.readdirSync(path.join(dir, day)).filter(f => f.endsWith('.mp4'))) {
+        const full = path.join(dir, day, f);
+        out.push({ path: full, at: fs.statSync(full).mtimeMs, mime: 'video/mp4', folders: ['AI Safe Room', perfil?.data.name || 'Câmera', day, 'Clipes'], name: f });
+      }
+    }
+    return out;
+  },
+});
+
 // Miniaturas com mais de 30 dias saem
 setInterval(() => {
   const old = Date.now() - 30 * 864e5;
@@ -2421,6 +2443,7 @@ const server = http.createServer(async (req, res) => {
       case '/api/talk': return talk(req, res);
       case '/api/ai': return json(res, 200, req.method === 'POST' ? setAi(await readBody(req)) : aiInfo());
       case '/api/summaries': return json(res, 200, { ok: true, days: summaries() });
+      case '/api/drive': return json(res, 200, req.method === 'POST' ? await drive.set(await readBody(req)) : drive.info());
       case '/api/diagnose': return json(res, 200, await diagnose((await readBody(req)).what));
       case '/api/screen/direct-stream': {
         // O app vendo direto da câmera (sem IA): o endereço com usuário e senha, só para aparelhos com acesso

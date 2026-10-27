@@ -112,6 +112,9 @@ class Hub(val root: String, val key: String?) {
     fun ai(): JSONObject = json("$base/api/ai")
     fun setAi(body: JSONObject): JSONObject = json("$base/api/ai", body.toString())
     /** One line per day, last 30 days. */
+    /** Google Drive: connected or not, the code to sign in while it waits, how much went up. */
+    fun drive(): JSONObject = json("$base/api/drive")
+    fun setDrive(body: JSONObject): JSONObject = json("$base/api/drive", body.toString(), timeoutMs = 20_000)
     fun summaries(): JSONArray = json("$base/api/summaries").optJSONArray("days") ?: JSONArray()
     /** "wifi", "ai" or "camera": takes some seconds. */
     fun diagnose(what: String): JSONObject = json("$base/api/diagnose", JSONObject().put("what", what).toString(), timeoutMs = 120_000)

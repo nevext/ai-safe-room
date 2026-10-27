@@ -18,3 +18,8 @@ server/eventos/
 server/perfis/
 # atividades (miniaturas de dentro de casa)
 server/atividades/
+
+# Claude Code (local)
+.claude/settings.local.json
+# Google Drive: o cliente OAuth e o token da conta
+server/drive.json

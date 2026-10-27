@@ -841,7 +841,7 @@ fun SettingsScreen(role: String, onOpen: (Screen) -> Unit) {
             if (owner) {
                 ListRow(Icons.Outlined.Face, "Pessoas conhecidas", "Reconhecer as pessoas da casa pelo rosto", onClick = { onOpen(Screen.People) })
                 ListRow(Icons.Outlined.Group, "Família e aparelhos", "Quem tem acesso e o que cada um pode", onClick = { onOpen(Screen.Family) })
-                ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Soon("Armazenamento")) })
+                ListRow(Icons.Outlined.Inventory2, "Armazenamento", "Gravações e espaço em nuvem", onClick = { onOpen(Screen.Storage) })
             }
         }
         Spacer(Modifier.height(14.dp))

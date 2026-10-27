@@ -55,6 +55,7 @@ sealed interface Screen {
     data object Ai : Screen
     data object Diagnostics : Screen
     data object Summaries : Screen
+    data object Storage : Screen
     data class Day(val day: String, val at: Long) : Screen
     data object Notifications : Screen
     data object About : Screen
@@ -369,6 +370,10 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             Screen.Privacy -> {
                 BackHandler(onBack = back)
                 PrivacyScreen(onBack = back)
+            }
+            Screen.Storage -> if (h != null) {
+                BackHandler(onBack = back)
+                StorageScreen(live, onBack = back)
             }
             is Screen.Soon -> {
                 BackHandler(onBack = back)
