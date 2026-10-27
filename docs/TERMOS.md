@@ -1,7 +1,6 @@
-# AI Safe Room — Termos de uso (rascunho)
+# AI Safe Room — Termos de uso
 
-Versão de 26/10/2026. Rascunho para revisão de um advogado antes de publicar; falta pôr o nome/CNPJ e o contato de
-quem oferece o app, e o foro.
+Versão de 27/10/2026. O AI Safe Room é oferecido por David Neves (Nevext, projeto independente), nevext@outlook.com.
 
 ## 1. O que é o AI Safe Room
 
@@ -66,4 +65,4 @@ Podemos mudar estes termos; mudanças importantes serão avisadas no app antes d
 
 ## 11. Contato e foro
 
-[nome] · [e-mail]. Leis do Brasil; foro do domicílio do consumidor.
+David Neves (Nevext) · nevext@outlook.com. Leis do Brasil; foro do domicílio do consumidor.
