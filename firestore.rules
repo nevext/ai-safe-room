@@ -21,14 +21,17 @@ service cloud.firestore {
         && request.resource.data.owners == [me()]
         && request.resource.data.uids == [me()]
         && request.resource.data.members.keys().hasOnly([me()])
-        && request.resource.data.members[me()].role == 'owner';
+        && request.resource.data.members[me()].role == 'owner'
+        && !('plan' in request.resource.data);
 
       allow update: if signedIn() && (ownerChange() || joining(homeId));
       allow delete: if signedIn() && me() in resource.data.owners;
 
-      // Dono: muda tudo, mantendo de 1 a 2 donos e cada dono também na casa
+      // Dono: muda tudo (menos o plano, que só o servidor grava depois de conferir a compra na Play), mantendo de 1 a
+      // 2 donos e cada dono também na casa
       function ownerChange() {
         return me() in resource.data.owners
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['plan'])
           && request.resource.data.owners.size() >= 1
           && request.resource.data.owners.size() <= 2
           && request.resource.data.uids.hasAll(request.resource.data.owners);

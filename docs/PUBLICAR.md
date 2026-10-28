@@ -11,9 +11,12 @@ loja, quem faz cada parte e as decisões tomadas.
 - **Outras marcas são prioridade desde já**: o encaixe por marca é desenhado primeiro, XM e Tuya juntas, e a câmera
   ONVIF genérica na rede de casa.
 - **Avisos pelo FCM** porque, no Android, é o único jeito de o aviso chegar com o app fechado sem um serviço ligado o
-  tempo todo (OneSignal e afins usam o FCM por baixo). Só a parte de mensagens do Firebase; banco e contas são nossos.
-- **O camera-ai roda num servidor na nuvem**, com banco de dados de verdade (Postgres). Nada de caixinha vendida
-  nem PC ligado na casa da pessoa.
+  tempo todo (OneSignal e afins usam o FCM por baixo).
+- **O banco é o Firebase** (decidido em 27/10/2026, no lugar do Postgres): contas (Auth), casas, família, convites,
+  pedidos para entrar e o plano da casa no Firestore; avisos pelo FCM. Vídeo, fotos e clipes nunca vão para o
+  Firebase: ficam na casa ou no Drive da pessoa.
+- **O camera-ai roda num servidor na nuvem** para o pesado (vídeo, IA, nuvem das marcas) e é quem grava o plano depois
+  de conferir a compra na Play (Admin SDK). Nada de caixinha vendida nem PC ligado na casa da pessoa.
 - **O servidor chega na câmera pela nuvem do fabricante**, que é como os outros apps fazem (a câmera já fica
   conectada na nuvem da marca pelo número de série). Nada em casa, nada no roteador.
 - **Não existe nuvem para todas as câmeras**: o servidor tem um encaixe por marca (vincular, vídeo ao vivo, girar,
@@ -76,8 +79,12 @@ entrada: o app já está na casa no primeiro dia e a IA fica a um toque. Cada ma
 
 ## O que eu (Claude) faço
 
-1. [ ] **Servidor com contas**: Postgres, criar conta e entrar no app, família compartilhada (no lugar das chaves por
-       aparelho), câmeras por conta.
+1. [x] **Contas**: Entrar com o Google, a casa e a família no Firestore (0.3.0), pedir para entrar pelo Wi-Fi da
+       câmera (0.3.2).
+   - [x] **Base dos planos** (0.3.5): `homes/{id}.plan` = { tier, until }, só o servidor grava (regras); o app lê
+         (`Plan.kt`) e mostra em Ajustes. Sem plano na casa = "teste", tudo liberado. Falta, com a Play: Play Billing
+         no app, o servidor conferir a compra (notificações em tempo real da Play) e gravar o plano, e cada função
+         olhar `plan.allows(...)`.
 2. [ ] **Encaixe de nuvens**: a interface por marca e o da XM pronto para receber as chaves; testar com a nossa
        câmera assim que elas chegarem.
 3. [ ] **Avisos pelo FCM**: servidor e app, faltando só as chaves.
@@ -92,6 +99,8 @@ entrada: o app já está na casa no primeiro dia e a IA fica a um toque. Cada ma
 6. [ ] **Câmera ONVIF genérica** (outras marcas na rede de casa).
 7. [ ] **Qualidade**: relatório de travamentos, telas de erro claras, atualização do servidor sem parar tudo.
 8. [ ] **Clipes no Google Drive** com a assinatura.
+9. [ ] **Assinatura pela Google Play** (só quando o app estiver lá): a assinatura é da casa, a família é grátis
+       (planos em `docs/AI-SAFE-CAM.md`).
 
 ## Depois
 

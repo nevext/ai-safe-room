@@ -58,6 +58,7 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.VideocamOff
 import androidx.compose.material.icons.outlined.Wifi
+import androidx.compose.material.icons.outlined.WorkspacePremium
 import androidx.compose.material.icons.outlined.CropFree
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Face
@@ -867,11 +868,25 @@ fun SettingsScreen(role: String, onOpen: (Screen) -> Unit, onSignOut: () -> Unit
             ListRow(Icons.Outlined.Lock, "Privacidade", "Dados e permissões", onClick = { onOpen(Screen.Privacy) })
             ListRow(Icons.Outlined.Wifi, "Conexão", "Status, reconectar e ver de fora de casa", onClick = { onOpen(Screen.System) })
             ListRow(Icons.Outlined.Place, "Onde pôr a câmera", "Onde não pôr, e o que ajuda a imagem e a IA", onClick = { onOpen(Screen.Placement) })
+            PlanRow()
             ListRow(Icons.Outlined.Info, "Sobre", "Versão, termos de uso, privacidade", onClick = { onOpen(Screen.About) })
             if (owner) ListRow(Icons.Outlined.MonitorHeart, "Diagnóstico", "Testar a câmera, o Wi-Fi dela e a IA", onClick = { onOpen(Screen.Diagnostics) })
         }
         Spacer(Modifier.height(20.dp))
     }
+}
+
+/** The house's plan (the subscription is the house's: one owner pays, it counts for everyone). */
+@Composable
+private fun PlanRow() {
+    var plan by remember { mutableStateOf<Plan?>(null) }
+    LaunchedEffect(Unit) { plan = runCatching { Account.homes().firstOrNull()?.plan }.getOrNull() ?: Plan.TEST }
+    val p = plan ?: return
+    ListRow(Icons.Outlined.WorkspacePremium, "Plano: ${p.label}", when (p.effective) {
+        "teste" -> "Versão de teste: tudo liberado, sem pagar"
+        "gratis" -> "Ao vivo, o que a câmera faz e a família inteira"
+        else -> "Vale para todos da casa"
+    }, onClick = null)
 }
 
 /** For members and guests: what this phone can do, and who to ask for the rest. */

@@ -24,8 +24,9 @@ import java.util.concurrent.TimeUnit
  *
  * homes/{id}: { name, owners: [uid] (até 2), uids: [uid] (todos), members: { uid: { role, name, email, until } },
  *               hub: { root, serial },     — the computer (only for the AI)
- *               camera: { addr, user, pass, serial, name, twoLenses } }   — the camera itself: any phone of the house
+ *               camera: { addr, user, pass, serial, name, twoLenses },   — the camera itself: any phone of the house
  *                                           talks to it straight, without the computer (only the house reads it)
+ *               plan: { tier, until } }   — the house's subscription (Plan.kt), written only by the server
  * invites/{homeId}_{email}: { homeId, homeName, email, role, hours, by, byName, at }   — the owner's invite by e-mail
  * cameras/{serial}: { homeId, homeName, ownerName }   — whose house a camera is (its serial is said only on the Wi-Fi)
  * joins/{homeId}_{uid}: { homeId, serial, uid, name, email, device, status, role, at }   — a new phone asking to come in;
@@ -211,7 +212,7 @@ data class Join(val id: String, val homeId: String, val uid: String, val name: S
 data class Member(val uid: String, val role: String, val name: String, val email: String, val until: Long?)
 
 data class Home(val id: String, val name: String, val owners: List<String>, val members: Map<String, Member>, val root: String?, val serial: String?,
-                val camera: CameraLink.Access? = null) {
+                val camera: CameraLink.Access? = null, val plan: Plan = Plan.TEST) {
     fun roleOf(uid: String?): String? = uid?.let { members[it]?.role }
     companion object {
         @Suppress("UNCHECKED_CAST")
@@ -225,7 +226,7 @@ data class Home(val id: String, val name: String, val owners: List<String>, val 
             val camera = c?.get("addr")?.let { CameraLink.Access(it as String, c["user"] as? String ?: "admin", c["pass"] as? String ?: "",
                 c["serial"] as? String ?: "", c["name"] as? String ?: "Câmera", c["twoLenses"] as? Boolean ?: false) }
             return Home(id, data["name"] as? String ?: "Casa", (data["owners"] as? List<String>).orEmpty(), members, hub?.get("root") as? String,
-                hub?.get("serial") as? String, camera)
+                hub?.get("serial") as? String, camera, Plan.from(data["plan"]))
         }
     }
 }
