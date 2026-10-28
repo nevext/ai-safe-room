@@ -162,23 +162,33 @@ class Guard : Service() {
     @Volatile private var joinRegs = emptyList<ListenerRegistration>()
     private val shownJoins = mutableSetOf<String>()
 
+    /** Signed in later, or a house made or joined later: looks again every minute and listens to the houses it owns. */
     private fun watchJoins() {
-        val uid = Account.user?.uid ?: return
-        val homes = runCatching { runBlocking { Account.homes() } }.getOrDefault(emptyList()).filter { it.roleOf(uid) == "owner" }
-        joinRegs = homes.map { h ->
-            Account.watchJoins(h) { list ->
-                val nm = getSystemService(NotificationManager::class.java)
-                // Answered (here or on another owner's phone): the notification goes
-                shownJoins.filter { id -> id.startsWith(h.id + "_") && list.none { it.id == id } }.forEach { nm.cancel(it.hashCode()); shownJoins -= it }
-                list.filter { it.id !in shownJoins }.forEach { j ->
-                    shownJoins += j.id
-                    if (!on("notifyAccess")) return@forEach
-                    val who = j.name.ifEmpty { j.email }
-                    val extras = arrayOf("homeId" to h.id, "joinId" to j.id, "uid" to j.uid, "name" to j.name, "email" to j.email, "device" to j.device)
-                    alert(j.id.hashCode(), "$who quer entrar", "${j.email}, pelo ${j.device}, no Wi-Fi da câmera. Só permita se for de casa.", null,
-                        actions = listOf(action("joinAllow", "Permitir", j.id.hashCode(), *extras), action("joinDeny", "Recusar", j.id.hashCode(), *extras)))
-                }
+        var watching = emptySet<String>()
+        while (running) {
+            val uid = Account.user?.uid
+            val homes = if (uid == null) emptyList()
+                else runCatching { runBlocking { Account.homes() } }.getOrNull()?.filter { it.roleOf(uid) == "owner" }
+            if (homes != null && homes.map { it.id }.toSet() != watching) {
+                watching = homes.map { it.id }.toSet()
+                joinRegs.forEach { it.remove() }
+                joinRegs = homes.map { h -> Account.watchJoins(h) { list -> onJoins(h, list) } }
             }
+            Thread.sleep(60_000)
+        }
+    }
+
+    private fun onJoins(h: Home, list: List<Join>) {
+        val nm = getSystemService(NotificationManager::class.java)
+        // Answered (here or on another owner's phone): the notification goes
+        shownJoins.filter { id -> id.startsWith(h.id + "_") && list.none { it.id == id } }.forEach { nm.cancel(it.hashCode()); shownJoins -= it }
+        list.filter { it.id !in shownJoins }.forEach { j ->
+            shownJoins += j.id
+            if (!on("notifyAccess")) return@forEach
+            val who = j.name.ifEmpty { j.email }
+            val extras = arrayOf("homeId" to h.id, "joinId" to j.id, "uid" to j.uid, "name" to j.name, "email" to j.email, "device" to j.device)
+            alert(j.id.hashCode(), "$who quer entrar", "${j.email}, pelo ${j.device}, no Wi-Fi da câmera. Só permita se for de casa.", null,
+                actions = listOf(action("joinAllow", "Permitir", j.id.hashCode(), *extras), action("joinDeny", "Recusar", j.id.hashCode(), *extras)))
         }
     }
 

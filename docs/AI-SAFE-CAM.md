@@ -90,9 +90,13 @@ Proposta:
 
 | Plano | Preço | O que tem |
 |---|---|---|
-| **Grátis** | R$ 0 | teste da câmera (nível), ao vivo em casa, aviso de movimento |
-| **Essencial** | ~R$ 12,90/mês | até 2 câmeras, IA de pessoa/animal, avisos no celular, ver de fora de casa, clipes por 7 dias |
-| **Família** | ~R$ 24,90/mês | até 5 câmeras, clipes por 30 dias, seguir digital, várias pessoas da casa |
+| **Grátis** | R$ 0 | 1 câmera, teste da câmera (nível), ao vivo em casa, o que a câmera faz sozinha (luz, girar, falar, avisos dela), a família inteira |
+| **Essencial** | ~R$ 12,90/mês | até 2 câmeras, IA de pessoa/animal, ver de fora de casa, clipes por 7 dias |
+| **Família** | ~R$ 24,90/mês | até 5 câmeras, clipes por 30 dias, rostos, seguir digital |
+
+**A assinatura é da casa** (decidido em 27/10/2026): um dono paga pela Google Play e vale para todos da casa; a
+família (donos, membros, convidados) é sempre grátis, porque cada pessoa a mais vendo a câmera ajuda a vender o
+plano. O plano fica na casa no Firestore e só o servidor escreve (depois de conferir a compra na Play); o app só lê.
 
 Desconto no anual. Fica abaixo de Vivo e Positivo, e com IA, que elas não destacam.
 

@@ -129,7 +129,9 @@ class MainActivity : ComponentActivity() {
         prefs.sealOld("key", "camera", "directStream")   // secrets saved before they were encrypted
         CameraLink.get(this)   // the camera straight from the phone (without the computer)
         asked.value = intent?.getStringExtra("open")
-        // The warnings keep going with the app closed, if they were on
+        // The warnings keep going with the app closed: on from the start (someone asking in, the camera offline);
+        // each kind can be turned off in Ajustes → Notificações
+        if (!prefs.contains("notify")) prefs.edit().putBoolean("notify", true).apply()
         if (prefs.getBoolean("notify", false)) runCatching { Guard.start(this) }
         setContent {
             var theme by remember { mutableStateOf(prefs.getString("theme", "system") ?: "system") }
@@ -171,6 +173,15 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
     var previous by remember { mutableStateOf<Screen>(Screen.Home) }
     var skipHouses by remember { mutableStateOf(false) }   // "configurar a minha própria câmera": don't ask to join again   // where back goes from a screen opened over another
     val activity = LocalContext.current as Activity
+    // Android 13+: the notifications need a yes, asked once when the app first opens the house
+    val askNotify = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(screen) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && screen == Screen.Home && !prefs.getBoolean("notifyAsked", false) &&
+            activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            prefs.edit().putBoolean("notifyAsked", true).apply()
+            askNotify.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     val keep = { h: Hub ->
         prefs.edit().putString("root", h.root).putSecret("key", h.key).apply()
