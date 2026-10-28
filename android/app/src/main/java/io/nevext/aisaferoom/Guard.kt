@@ -216,6 +216,14 @@ class Guard : Service() {
                     prefs.edit().putInt("summaryDay", today).apply()
                 }
             }
+            // A newer version of the app: once per version, quiet, opening the app (which offers Atualizar)
+            if (!night && System.currentTimeMillis() - prefs.getLong("updateCheckAt", 0) > 6 * 3600_000) {
+                prefs.edit().putLong("updateCheckAt", System.currentTimeMillis()).apply()
+                runCatching { Updates.newer(this) }.getOrNull()?.takeIf { it.version != prefs.getString("updateTold", null) }?.let { r ->
+                    prefs.edit().putString("updateTold", r.version).apply()
+                    quiet(UPDATE, "Versão nova do AI Safe Room: ${r.version}", "Toque para atualizar")
+                }
+            }
             Thread.sleep(60_000)
         }
     }
@@ -270,6 +278,7 @@ class Guard : Service() {
         private const val SUMMARY_ID = 4
         private const val SCHEDULE = 5
         private const val PAUSE = 6
+        private const val UPDATE = 7
 
         fun channels(c: Context) {
             val nm = c.getSystemService(NotificationManager::class.java)

@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Atualizar o app pelo próprio app (versão nova do GitHub, enquanto ele não está na Play) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- O app fala com o computador de casa (camera-ai) por HTTP na rede local -->
     <application
@@ -30,6 +32,13 @@
             </intent-filter>
         </activity>
         <receiver android:name=".NotifyActions" android:exported="false" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/updates" />
+        </provider>
         <service
             android:name=".Guard"
             android:exported="false"

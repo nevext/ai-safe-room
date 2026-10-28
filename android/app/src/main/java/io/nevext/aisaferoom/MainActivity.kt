@@ -348,6 +348,7 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             Screen.Home, Screen.Cameras, Screen.Activity, Screen.Settings -> if (h != null) Tabs(s, live.unseen, onTab = { tab = it; screen = it }) {
                 LinkHome(live, prefs)
                 JoinRequests()
+                UpdatePrompt()
                 when (s) {
                     Screen.Home -> HomeScreen(live, visible && fullscreen == null, onCamera = { open(Screen.Camera) }, onSystem = { open(Screen.System) },
                         onActivity = { tab = Screen.Activity; screen = Screen.Activity }, onFullscreen = { fullscreen = "whole" },
