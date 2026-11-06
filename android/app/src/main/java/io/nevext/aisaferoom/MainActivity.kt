@@ -93,6 +93,8 @@ class Live {
     val aiOn: Boolean get() = info?.optJSONObject("ai")?.optBoolean("enabled") == true
     /** Away from home (using the address set in Conexão): the camera isn't reachable direct, the video comes via the computer. */
     var away by mutableStateOf(false)
+    /** Away and the camera came through its own cloud (XM), by serial: no computer needed. */
+    var cloud by mutableStateOf(false)
     /** Hearing the room (the speaker on the video). */
     var listen by mutableStateOf(false)
     val hasPtz: Boolean get() = info?.optBoolean("ptz") == true && !guest
@@ -206,8 +208,20 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
             val r = withContext(Dispatchers.IO) { runCatching { h.screen() to runCatching { h.activity() }.getOrNull() } }
             r.onSuccess { (info, act) ->
                 val phoneOnly = info.optBoolean("phoneOnly")
-                val camOk = info.optJSONObject("camera")?.optBoolean("connected") == true
-                // The camera isn't on this Wi-Fi: use the computer's internet address (it relays the picture)
+                var camOk = info.optJSONObject("camera")?.optBoolean("connected") == true
+                // The camera isn't on this Wi-Fi: first its own cloud, by serial (like its original app, no computer)
+                var cloudSaid: String? = null
+                if (phoneOnly && !camOk) {
+                    val a = CameraLink.current()?.access
+                    cloudSaid = if (a == null) "O app ainda não conhece a câmera." else XmCloud.login(activity, a)
+                    live.cloud = cloudSaid == null
+                    if (live.cloud) {
+                        camOk = true
+                        info.optJSONObject("camera")?.put("connected", true)
+                        info.remove("problem")
+                    }
+                } else live.cloud = false
+                // Then the computer's internet address, if there is one (it relays the picture, and has the AI)
                 if (phoneOnly && !camOk) {
                     val pub = withContext(Dispatchers.IO) { awayRoot(prefs, h) }
                     if (pub != null) {
@@ -215,8 +229,8 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                         live.away = true
                         return@LaunchedEffect
                     }
-                    if (live.away || prefs.getString("remote", null) != null)
-                        info.put("problem", "Fora de casa, a câmera aparece pelo computador de casa, e ele não está respondendo. Confira se ele está ligado e com o AI Safe Room aberto.")
+                    // What went wrong with the cloud says more than "not on this network" (wrong password, camera offline)
+                    if (XmCloud.hasKeys(activity) && cloudSaid != null) info.put("problem", cloudSaid)
                 }
                 // Back home: the Wi-Fi address again (faster than going around through the internet)
                 if (live.away) {

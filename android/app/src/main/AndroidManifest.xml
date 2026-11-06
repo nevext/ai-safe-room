@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -12,6 +13,11 @@
     <!-- Atualizar o app pelo próprio app (versão nova do GitHub, enquanto ele não está na Play) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- O kit da XM pede localização e mexer no Wi-Fi para configurar câmera nova pelo Wi-Fi; ainda não usamos, e a
+         Play não aceita permissão sem uso -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" tools:node="remove" />
+
     <!-- O app fala com o computador de casa (camera-ai) por HTTP na rede local -->
     <application
         android:label="AI Safe Room"
@@ -21,6 +27,19 @@
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/no_backup"
         android:theme="@style/Theme.AiSafeRoom">
+        <!-- As chaves da nuvem da XM (android/xm.properties, fora do git) -->
+        <meta-data android:name="APP_UUID" android:value="${xmUuid}" />
+        <meta-data android:name="APP_KEY" android:value="${xmAppKey}" />
+        <meta-data android:name="APP_SECRET" android:value="${xmAppSecret}" />
+        <meta-data android:name="APP_MOVECARD" android:value="${xmMoveCard}" />
+        <!-- As telas de exemplo que vêm no kit da XM: o app tem as suas -->
+        <activity android:name="com.xm.activity.device.monitor.view.XMMonitorActivity" tools:node="remove" />
+        <activity android:name="com.xm.activity.device.devset.ability.view.XMDevAbilityActivity" tools:node="remove" />
+        <activity android:name="com.xm.kotlin.account.login.view.XMLoginActivity" tools:node="remove" />
+        <activity android:name="com.xm.kotlin.main.XMMainActivity" tools:node="remove" />
+        <activity android:name="com.xm.kotlin.device.monitor.view.XMMonitorActivity" tools:node="remove" />
+        <activity android:name="com.xm.kotlin.device.devset.ability.view.XMDevAbilityActivity" tools:node="remove" />
+        <activity android:name="com.xm.activity.device.router.view.SetDevToRouterByQrCodeActivity" tools:node="remove" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

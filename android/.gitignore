@@ -6,3 +6,5 @@ local.properties
 .kotlin/
 keystore.properties
 *.jks
+# as chaves da nuvem da XM (plataforma aberta da JFTech)
+xm.properties

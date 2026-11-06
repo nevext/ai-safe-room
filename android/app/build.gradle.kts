@@ -8,6 +8,10 @@ plugins {
 // A chave que assina as versões de verdade: android/keystore.properties e o .jks ficam fora do git (guarde cópia:
 // sem ela não dá para atualizar o app instalado)
 val signing = Properties().apply { rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use(::load) }
+// The XM / JFTech cloud keys (open platform → the "AI Safe Room" app): android/xm.properties, outside git.
+// xm.uuid, xm.appKey, xm.appSecret, xm.moveCard. Without the file the app builds, and seeing from outside by the
+// camera's cloud says it isn't on yet.
+val xm = Properties().apply { rootProject.file("xm.properties").takeIf { it.exists() }?.inputStream()?.use(::load) }
 
 android {
     namespace = "io.nevext.aisaferoom"
@@ -19,6 +23,9 @@ android {
         targetSdk = 36
         versionCode = 20
         versionName = "0.3.7"
+        manifestPlaceholders += mapOf(
+            "xmUuid" to xm.getProperty("xm.uuid", ""), "xmAppKey" to xm.getProperty("xm.appKey", ""),
+            "xmAppSecret" to xm.getProperty("xm.appSecret", ""), "xmMoveCard" to xm.getProperty("xm.moveCard", ""))
     }
 
     signingConfigs {
@@ -34,13 +41,19 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 
     buildFeatures {
         compose = true
+    }
+
+    // XM's native library is 23 MB per processor type: compressed inside the APK the download is much smaller (the
+    // Play Store also sends each phone only its own type)
+    packaging {
+        jniLibs.useLegacyPackaging = true
     }
 
     compileOptions {
@@ -66,4 +79,6 @@ dependencies {
     implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
+    // XM / JFTech cloud (iCSee, XMEye): the camera by serial from anywhere, P2P, no computer (XmCloud.kt)
+    implementation("io.github.xmcamera:libxmfunsdk:2.1")
 }

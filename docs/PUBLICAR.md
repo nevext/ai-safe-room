@@ -28,16 +28,21 @@ loja, quem faz cada parte e as decisões tomadas.
   - Depois **Imou / Dahua** (open.imoulife.com) e **EZVIZ / Hikvision** (open.ezviz.com).
   - Sem nuvem aberta (Tapo, Mibo): só pela rede de casa (ONVIF/RTSP); de fora, o app em casa fazendo a ponte
     (plano B).
-- **Ver ao vivo em casa continua direto na câmera** (o lag zero que conseguimos). De fora, pelo servidor. O HLS da
-  nuvem tem alguns segundos de atraso: não importa para IA e avisos.
+- **Ver ao vivo em casa continua direto na câmera** (o lag zero que conseguimos). **De fora, o próprio app entra na
+  câmera pela nuvem da marca, P2P pelo número de série** (como o iCSee), sem PC e sem servidor nosso no caminho do
+  vídeo (decidido em 2026-11-06: "isso de pc ligado não existe"). XM: kit oficial FunSDK
+  (`io.github.xmcamera:libxmfunsdk`, Apache 2.0) em `XmCloud.kt`; as chaves em `android/xm.properties` (fora do git:
+  `xm.uuid`, `xm.appKey`, `xm.appSecret`, `xm.moveCard`). O PC/servidor fica só para a IA (o túnel do PC, 0.3.7, é a
+  reserva de quem usa a IA).
 - **Avisos pelo Firebase (FCM)**, no lugar do serviço `Guard` sempre ligado.
 - **Clipes no Google Drive da pessoa**: 30 dias grátis; se a assinatura falhar, os clipes são apagados. Cobrança pela
   Google Play.
 
 ## O que o dono faz (contas e pagamentos)
 
-1. [ ] **XM / JFTech**: conta de desenvolvedor em open.jftech.com, criar o app "AI Safe Room" e pegar `uuid`,
-       `appKey`, `appSecret`, `movecard` (vão em `server/jf.json`, fora do git). É o teste que confirma o plano.
+1. [ ] **XM / JFTech**: conta de desenvolvedor em https://oppf.xmcsrv.com (guia: #/docs?md=readGuide), Console →
+       Criar aplicativo Android, pacote `io.nevext.aisaferoom`; pegar `uuid`, `AppKey`, `AppSecret`, `movedCard`
+       (vão em `android/xm.properties`, fora do git). É o teste que confirma o plano.
        Ver se pede empresa (CNPJ), preço e limites.
 2. [ ] **Servidor**: Oracle Cloud Always Free em Brazil East (São Paulo), Ampere A1, Ubuntu, 4 OCPU / 24 GB, com a
        chave SSH pública que eu gerar; passar o IP. Reserva: Vultr São Paulo (uns US$ 12–24/mês). Evitar quem não

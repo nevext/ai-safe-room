@@ -191,6 +191,7 @@ internal fun whenText(at: Long): String {
 private fun LiveVideo(live: Live, view: String, visible: Boolean, modifier: Modifier = Modifier, fit: Boolean = false) {
     // Direct from the camera (no AI), unless away from home or the camera won't open direct: then via the computer
     var directFailed by remember(live.hub) { mutableStateOf(false) }
+    if (live.cloud) return CloudVideo(live, visible, modifier)
     if (!live.aiOn && !live.away && !directFailed) return DirectVideo(live, view, visible, modifier, fit, onGiveUp = { directFailed = true })
     AiVideo(live, view, visible, modifier, fit)
 }
