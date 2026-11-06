@@ -1,12 +1,12 @@
 // Endereço do computador na internet, sem abrir porta no roteador.
 // O cloudflared (server/bin) abre um túnel rápido da Cloudflare até o camera-ai nesta máquina.
-// O endereço (https://….trycloudflare.com) muda quando o túnel reabre; quem é dono da casa grava em hub.public.
+// O endereço (https://….trycloudflare.com) muda quando o túnel reabre; o PC grava sozinho em reach/{casa}, assinado.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
 /**
- * @param {{ port: number, bin: string, onUrl: (url: string|null) => void, getToken: () => string|null,
- *           getHome: () => string|null, writePublic: (homeId: string, token: string, url: string|null) => Promise<boolean> }} o
+ * @param {{ port: number, bin: string, onUrl: (url: string|null) => void, getKey: () => string,
+ *           getHome: () => string|null, writeReach: (homeId: string, url: string, key: string) => Promise<boolean> }} o
  */
 export function startAway(o) {
   if (!fs.existsSync(o.bin)) {
@@ -21,11 +21,12 @@ export function startAway(o) {
   async function publish(next) {
     url = next;
     o.onUrl(next);
-    const token = o.getToken(), home = o.getHome();
-    if (!token || !home || next === published) return;
-    if (await o.writePublic(home, token, next).catch(() => false)) {
-      published = next;
-      console.log(`${new Date().toLocaleTimeString('pt-BR')} Ver de fora: ${next || '(sem endereço)'}`);
+    const home = o.getHome(), key = o.getKey();
+    const mark = `${home}|${next}`;
+    if (!next || !home || !key || mark === published) return;
+    if (await o.writeReach(home, next, key).catch(() => false)) {
+      published = mark;
+      console.log(`${new Date().toLocaleTimeString('pt-BR')} Ver de fora: endereço publicado na conta`);
     }
   }
 
@@ -45,13 +46,13 @@ export function startAway(o) {
     });
     c.on('exit', () => {
       if (child === c) child = null;
-      if (url) { url = null; o.onUrl(null); published = null; }
+      if (url) { url = null; o.onUrl(null); }
       if (!stopping) setTimeout(start, 5000);
     });
   }
 
   start();
-  // The owner's token arrives when a phone at home talks to the computer; publish again once it does
-  const beat = setInterval(() => { if (!stopping && url && url !== published) publish(url); }, 30_000);
+  // Again when the last try failed (no internet yet) or the computer was linked to another house
+  const beat = setInterval(() => { if (!stopping && url) publish(url); }, 30_000);
   return { stop() { stopping = true; clearInterval(beat); child?.kill(); } };
 }

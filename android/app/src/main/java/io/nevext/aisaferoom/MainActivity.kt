@@ -202,7 +202,6 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
         val h = live.hub ?: return@LaunchedEffect
         if (!visible) return@LaunchedEffect
         var first = true
-        var sentAway: String? = null
         while (true) {
             val r = withContext(Dispatchers.IO) { runCatching { h.screen() to runCatching { h.activity() }.getOrNull() } }
             r.onSuccess { (info, act) ->
@@ -216,14 +215,21 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                         live.away = true
                         return@LaunchedEffect
                     }
+                    if (live.away || prefs.getString("remote", null) != null)
+                        info.put("problem", "Fora de casa, a câmera aparece pelo computador de casa, e ele não está respondendo. Confira se ele está ligado e com o AI Safe Room aberto.")
+                }
+                // Back home: the Wi-Fi address again (faster than going around through the internet)
+                if (live.away) {
+                    val home = prefs.getString("root", null)
+                    if (home != null && home != h.root && withContext(Dispatchers.IO) { Hub.ping(h.at(home)) }) {
+                        live.hub = h.at(home)
+                        live.away = false
+                        return@LaunchedEffect
+                    }
                 }
                 // At home, remember the computer's internet address for the next time this phone is away
-                if (!phoneOnly) {
-                    val url = withContext(Dispatchers.IO) { runCatching { h.awayUrl() }.getOrNull() }
-                    if (url != null && url != prefs.getString("remote", null)) prefs.edit().putString("remote", url).apply()
-                    val homeId = prefs.getString("homeLinked", null)
-                    if (url != null && url != sentAway && homeId != null && live.owner &&
-                        withContext(Dispatchers.IO) { runCatching { Account.setPublic(homeId, url) }.isSuccess }) sentAway = url
+                if (!phoneOnly) withContext(Dispatchers.IO) { h.awayUrl() }?.let { url ->
+                    if (url != prefs.getString("remote", null)) prefs.edit().putString("remote", url).apply()
                 }
                 live.info = info
                 // Protection's state on the phone too: without the computer, the camera's own alerts follow it
@@ -527,10 +533,11 @@ fun rememberCameraPicture(hub: Hub): ImageBitmap? {
  */
 private suspend fun awayRoot(prefs: SharedPreferences, h: Hub): String? {
     val kept = prefs.getString("remote", null)
-    val saved = runCatching { Account.homes().mapNotNull { it.publicRoot } }.getOrDefault(emptyList())
+    // The address changes when the computer restarts: the computer publishes the new one itself, signed with the house's key
+    val saved = runCatching { Account.homes().mapNotNull { runCatching { Account.reachRoot(it) }.getOrNull() } }.getOrDefault(emptyList())
     for (r in listOfNotNull(kept).plus(saved).distinct()) {
         if (r == h.root) continue
-        if (runCatching { h.at(r).screen() }.isSuccess) {
+        if (Hub.pcAnswers(h.at(r))) {
             if (r != kept) prefs.edit().putString("remote", r).apply()
             return h.at(r).root
         }

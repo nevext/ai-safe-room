@@ -148,9 +148,19 @@ object Account {
         db.collection("homes").document(home.id).update(mapOf("hub.root" to root, "hub.serial" to serial)).await()
     }
 
-    /** The computer's address on the internet, so a phone away from home still reaches it. Owners only (the rules). */
-    suspend fun setPublic(homeId: String, url: String) {
-        db.collection("homes").document(homeId).update("hub.public", url).await()
+    /**
+     * The computer's address on the internet (its tunnel), as the computer itself published it in reach/{home}. Used
+     * only if signed with the house's key (hub.reachKey, read by the family only): someone else who wrote there can't
+     * send this phone, and its Google sign-in, to their own server.
+     */
+    suspend fun reachRoot(home: Home): String? {
+        val key = home.reachKey ?: return null
+        val d = db.collection("reach").document(home.id).get().await()
+        val url = d.getString("url")?.takeIf { it.startsWith("https://") } ?: return null
+        val sig = d.getString("sig") ?: return null
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256").apply { init(javax.crypto.spec.SecretKeySpec(key.toByteArray(), "HmacSHA256")) }
+        val want = mac.doFinal(url.toByteArray()).joinToString("") { "%02x".format(it) }
+        return url.takeIf { java.security.MessageDigest.isEqual(want.toByteArray(), sig.lowercase().toByteArray()) }
     }
 
     /** The owner invites by e-mail: the person signs in with that Google account and lands in the house. */
@@ -217,7 +227,7 @@ data class Join(val id: String, val homeId: String, val uid: String, val name: S
 data class Member(val uid: String, val role: String, val name: String, val email: String, val until: Long?)
 
 data class Home(val id: String, val name: String, val owners: List<String>, val members: Map<String, Member>, val root: String?, val serial: String?,
-                val camera: CameraLink.Access? = null, val plan: Plan = Plan.TEST, val publicRoot: String? = null) {
+                val camera: CameraLink.Access? = null, val plan: Plan = Plan.TEST, val reachKey: String? = null) {
     fun roleOf(uid: String?): String? = uid?.let { members[it]?.role }
     companion object {
         @Suppress("UNCHECKED_CAST")
@@ -231,7 +241,7 @@ data class Home(val id: String, val name: String, val owners: List<String>, val 
             val camera = c?.get("addr")?.let { CameraLink.Access(it as String, c["user"] as? String ?: "admin", c["pass"] as? String ?: "",
                 c["serial"] as? String ?: "", c["name"] as? String ?: "Câmera", c["twoLenses"] as? Boolean ?: false) }
             return Home(id, data["name"] as? String ?: "Casa", (data["owners"] as? List<String>).orEmpty(), members, hub?.get("root") as? String,
-                hub?.get("serial") as? String, camera, Plan.from(data["plan"]), hub?.get("public") as? String)
+                hub?.get("serial") as? String, camera, Plan.from(data["plan"]), hub?.get("reachKey") as? String)
         }
     }
 }

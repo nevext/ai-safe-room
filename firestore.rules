@@ -73,6 +73,18 @@ service cloud.firestore {
       allow delete: if signedIn() && me() in home(resource.data.homeId).owners;
     }
 
+    // Endereço de fora da casa (o túnel do PC). O PC grava sem conta; o endereço vai assinado com a chave da casa
+    // (homes/{casa}.hub.reachKey, que só a família lê), e o celular confere antes de usar.
+    match /reach/{homeId} {
+      allow get: if signedIn() && me() in home(homeId).uids;
+      allow create, update: if request.resource.data.keys().hasOnly(['url', 'at', 'sig'])
+        && request.resource.data.url is string
+        && request.resource.data.url.matches('https://[a-z0-9-]+[.]trycloudflare[.]com')
+        && request.resource.data.at is timestamp
+        && request.resource.data.sig is string
+        && request.resource.data.sig.size() == 64;
+    }
+
     // Pedido para entrar: o id é <casa>_<uid>. O celular novo pede (sabendo a série da câmera da casa, ou seja, no
     // Wi-Fi dela); um dono responde (e ele mesmo põe a pessoa na casa). Quem pediu vê a resposta e pode desistir.
     match /joins/{joinId} {

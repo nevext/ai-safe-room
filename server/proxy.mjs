@@ -21,7 +21,7 @@ import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
 import { createClips } from './clips.mjs';
 import { createDrive } from './drive.mjs';
-import { accountOf, ownerOf, writePublic } from './account.mjs';
+import { accountOf, ownerOf, writeReach, shareReachKey } from './account.mjs';
 import { startAway } from './away.mjs';
 import { createProfiles } from './perfil.mjs';
 import { loadFaces, createPeople, pose, similarity, outfit, outfitSimilarity, hasColor, SAME_PERSON } from './faces.mjs';
@@ -2148,15 +2148,24 @@ const knownKey = (k) => !!deviceOf(k);
 // Quem está pedindo: o próprio PC é dono
 // A conta Google do app (Authorization: Bearer <token do Firebase>): o papel vem da casa no Firestore
 const bearer = (req) => /^Bearer\s+(\S+)$/.exec(req.headers.authorization || '')?.[1];
-// The last owner's token, kept in memory: the tunnel publishes hub.public with it. Never written to disk.
-let ownerToken = null;
 async function who(req, prefixed) {
   if (fromThisPc(req)) return { id: null, name: 'Este computador', role: 'owner' };
   const device = deviceOf(prefixed?.[1]) || deviceOf(cookieKey(req)) || deviceOf(req.headers['x-key']);
   const account = bearer(req) && access.homeId ? await accountOf(bearer(req), access.homeId) : null;
   // O aparelho e a conta: vale o papel maior (o celular que era membro e cuja conta é dona da casa é dono)
   const rank = (w) => ({ owner: 3, member: 2, guest: 1 })[w?.role] || 0;
+  if (account?.role === 'owner') shareReach(bearer(req));
   return rank(account) > rank(device) ? account : device || account;
+}
+// The house's key for the outside address (see writeReach): made here once, handed to the house with an owner's token
+if (!access.reachKey) { access.reachKey = crypto.randomBytes(32).toString('hex'); access.reachShared = null; }   // saved by the setImmediate below
+let sharing = false;
+function shareReach(token) {
+  if (sharing || !access.homeId || access.reachShared === access.homeId) return;
+  sharing = true;
+  shareReachKey(access.homeId, token, access.reachKey).then((ok) => {
+    if (ok) { access.reachShared = access.homeId; saveState(); console.log(`${new Date().toLocaleTimeString('pt-BR')} Ver de fora: chave da casa guardada na conta`); }
+  }).catch(() => {}).finally(() => { sharing = false; });
 }
 // Ligar este PC à casa (da conta Google de um dono): quem pede precisa já ser dono aqui, ou saber a senha do PC
 async function linkHome(req, prefixed, b) {
@@ -2172,6 +2181,7 @@ async function linkHome(req, prefixed, b) {
   if (!sameCamera && here?.role !== 'owner' && !passwordOk(b.password)) return { ok: false, error: 'senha do computador', needPassword: true };
   access.homeId = homeId;
   saveState();
+  shareReach(token);
   console.log(`${new Date().toLocaleTimeString('pt-BR')} Computador ligado à casa "${owner.home.name || 'Casa'}" de ${owner.email}`);
   return { ok: true, homeId };
 }
@@ -2428,7 +2438,6 @@ const server = http.createServer(async (req, res) => {
     }
     if (u.pathname === '/api/home/link' && req.method === 'POST') return json(res, 200, await linkHome(req, prefixed, await readBody(req)));
     const me = await who(req, prefixed);
-    if (me?.google && me.role === 'owner' && bearer(req)) ownerToken = bearer(req);
     if (!me) {
       if (u.pathname.startsWith('/api/')) return json(res, 401, { error: 'senha', login: '/api/login' });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -2594,9 +2603,9 @@ startAway({
   port: PORT,
   bin: path.join(HERE, 'bin', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared'),
   onUrl: (u) => { awayUrl = u; },
-  getToken: () => ownerToken,
+  getKey: () => access.reachKey,
   getHome: () => access.homeId || null,
-  writePublic,
+  writeReach,
 });
 
 server.listen(PORT, '0.0.0.0', () => {

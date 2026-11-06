@@ -53,7 +53,8 @@ class Hub(val root: String, val key: String?) {
         val known = link?.access != null
         val pc = runCatching { json(base + "/api/screen", timeoutMs = if (known) 5_000 else 15_000) }
         pc.getOrNull()?.let { info ->
-            CameraLink.direct = info.optJSONObject("ai")?.optBoolean("enabled") != true
+            // Straight to the camera only when the AI is off and this phone reaches it (away, everything goes through the computer)
+            CameraLink.direct = info.optJSONObject("ai")?.optBoolean("enabled") != true && link?.access != null && link.probe()
             // Every time (it's small): the camera's address or password may have changed, even from another phone
             if (link != null) runCatching {
                 val a = json("$base/api/camera/access")
@@ -273,7 +274,10 @@ class Hub(val root: String, val key: String?) {
             }
         }
 
-        /** Whether the computer itself answers (not the camera standing in for it): quick, for the notifications. */
+        /** The computer itself answers at this address (not the camera standing in for it). */
+    fun pcAnswers(h: Hub): Boolean = runCatching { json(h.base + "/api/screen", timeoutMs = 10_000); true }.getOrDefault(false)
+
+    /** Whether the computer itself answers (not the camera standing in for it): quick, for the notifications. */
         fun ping(h: Hub): Boolean = runCatching { json(h.base + "/api/state", timeoutMs = 4_000); true }.getOrDefault(false)
 
         const val DISCOVERY_PORT = 8788

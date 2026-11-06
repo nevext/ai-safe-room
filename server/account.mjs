@@ -79,13 +79,28 @@ export async function accountOf(token, homeId) {
   return who;
 }
 
-/** Grava o endereço de fora da casa (hub.public). Só um dono passa nas regras; o token é o dele. */
-export async function writePublic(homeId, token, url) {
-  const value = url ? { stringValue: url } : { nullValue: null };
-  const r = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/homes/${encodeURIComponent(homeId)}?updateMask.fieldPaths=hub.public`, {
+/**
+ * Publica o endereço de fora (o túnel) em reach/{casa}, sem conta nenhuma: o PC grava sozinho, mesmo logo depois de
+ * reiniciar, sem esperar um celular em casa. Quem souber o id da casa pode sobrescrever, por isso o endereço vai
+ * assinado (HMAC) com a chave da casa, que só a família lê (homes/{casa}.hub.reachKey): o celular confere antes de usar.
+ */
+export async function writeReach(homeId, url, reachKey) {
+  const sig = crypto.createHmac('sha256', reachKey).update(url).digest('hex');
+  const r = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/reach/${encodeURIComponent(homeId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ fields: { url: { stringValue: url }, at: { timestampValue: new Date().toISOString() }, sig: { stringValue: sig } } }),
+  });
+  if (r.status !== 200) console.log(`Ver de fora: o Firebase recusou o endereço (${r.status}).`);
+  return r.status === 200;
+}
+
+/** Põe a chave da casa em homes/{casa}.hub.reachKey, com o token de um dono (as regras só deixam dono mudar a casa). */
+export async function shareReachKey(homeId, token, reachKey) {
+  const r = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/homes/${encodeURIComponent(homeId)}?updateMask.fieldPaths=hub.reachKey`, {
     method: 'PATCH',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ fields: { hub: { mapValue: { fields: { public: value } } } } }),
+    body: JSON.stringify({ fields: { hub: { mapValue: { fields: { reachKey: { stringValue: reachKey } } } } } }),
   });
   return r.status === 200;
 }
