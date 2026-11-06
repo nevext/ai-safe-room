@@ -52,7 +52,9 @@ function plain(v) {
 export async function readHome(homeId, token) {
   const r = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/homes/${encodeURIComponent(homeId)}`,
     { headers: { authorization: `Bearer ${token}` } });
-  if (r.status !== 200) return null;
+  // 403/404: really not this person's house. Anything else (Firebase slow, no internet): couldn't check now
+  if (r.status === 403 || r.status === 404) return null;
+  if (r.status !== 200) throw new Error(`Firestore ${r.status}`);
   const doc = await r.json();
   return Object.fromEntries(Object.entries(doc.fields || {}).map(([k, v]) => [k, plain(v)]));
 }
@@ -62,17 +64,27 @@ export async function readHome(homeId, token) {
  * inválido). Guarda por 1 minuto para não perguntar ao Google a cada pedido.
  */
 const cache = new Map();
+const lastGood = new Map();   // uid → { at, who }: the last time the house said who this is
+const checkGuest = (w) => (w && !(w.role === 'guest' && w.until && Date.now() > w.until) ? w : null);
 export async function accountOf(token, homeId) {
   if (!homeId || !token) return null;
   const hit = cache.get(token);
   if (hit && Date.now() - hit.at < 60000) return hit.who;
   const user = await verifyToken(token);
+  if (!user) console.log(`${new Date().toLocaleTimeString('pt-BR')} Conta Google: token recusado (vencido ou de outro projeto)`);
   let who = null;
   if (user) {
-    const home = await readHome(homeId, token).catch(() => null);
+    let home;
+    try { home = await readHome(homeId, token); }
+    catch (e) {
+      console.log(`${new Date().toLocaleTimeString('pt-BR')} Conta Google: não deu para conferir a casa agora (${e.message}); vale a última resposta`);
+      // Couldn't check right now: the last answer for this person (a day at most) instead of locking the owner out
+      const g = lastGood.get(user.uid);
+      return g && Date.now() - g.at < 86400000 ? checkGuest(g.who) : null;
+    }
     const m = home?.members?.[user.uid];
-    if (m && !(m.role === 'guest' && m.until && Date.now() > m.until))
-      who = { id: 'g:' + user.uid, uid: user.uid, name: m.name || user.name, email: user.email, role: m.role || 'member', until: m.until || null, google: true };
+    if (m) who = checkGuest({ id: 'g:' + user.uid, uid: user.uid, name: m.name || user.name, email: user.email, role: m.role || 'member', until: m.until || null, google: true });
+    if (who) lastGood.set(user.uid, { at: Date.now(), who }); else lastGood.delete(user.uid);
   }
   cache.set(token, { at: Date.now(), who });
   if (cache.size > 200) cache.delete(cache.keys().next().value);

@@ -204,8 +204,10 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
         val h = live.hub ?: return@LaunchedEffect
         if (!visible) return@LaunchedEffect
         var first = true
+        var lockedTries = 0
         while (true) {
             val r = withContext(Dispatchers.IO) { runCatching { h.screen() to runCatching { h.activity() }.getOrNull() } }
+            if (r.isSuccess) lockedTries = 0
             r.onSuccess { (info, act) ->
                 val phoneOnly = info.optBoolean("phoneOnly")
                 var camOk = info.optJSONObject("camera")?.optBoolean("connected") == true
@@ -254,7 +256,16 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
                 if (act != null) live.activity = act
                 live.problem = info.optString("problem").ifEmpty { null }
             }.onFailure {
-                if (it is Locked) { if (screen != Screen.Login) screen = Screen.LetIn(h.root); return@LaunchedEffect }
+                if (it is Locked) {
+                    // Signed in with the house's account and already in: the computer couldn't check the account just now
+                    // (its internet, Firebase slow). Say so and try again, instead of asking the owner to ask to join
+                    if (Account.user != null && live.info != null && ++lockedTries < 4) {
+                        live.problem = "O computador de casa não conseguiu conferir sua conta agora. Tentando de novo…"
+                        delay(10_000)
+                        continue
+                    }
+                    if (screen != Screen.Login) screen = Screen.LetIn(h.root); return@LaunchedEffect
+                }
                 // At home it's the Wi-Fi address; away, the one set in Conexão (and back again)
                 val home = prefs.getString("root", null)
                 val other = if (h.root == home) withContext(Dispatchers.IO) { awayRoot(prefs, h) } else home
