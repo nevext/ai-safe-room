@@ -145,7 +145,12 @@ object Account {
     }
 
     suspend fun setHub(home: Home, root: String?, serial: String?) {
-        db.collection("homes").document(home.id).update("hub", mapOf("root" to root, "serial" to serial)).await()
+        db.collection("homes").document(home.id).update(mapOf("hub.root" to root, "hub.serial" to serial)).await()
+    }
+
+    /** The computer's address on the internet, so a phone away from home still reaches it. Owners only (the rules). */
+    suspend fun setPublic(homeId: String, url: String) {
+        db.collection("homes").document(homeId).update("hub.public", url).await()
     }
 
     /** The owner invites by e-mail: the person signs in with that Google account and lands in the house. */
@@ -212,7 +217,7 @@ data class Join(val id: String, val homeId: String, val uid: String, val name: S
 data class Member(val uid: String, val role: String, val name: String, val email: String, val until: Long?)
 
 data class Home(val id: String, val name: String, val owners: List<String>, val members: Map<String, Member>, val root: String?, val serial: String?,
-                val camera: CameraLink.Access? = null, val plan: Plan = Plan.TEST) {
+                val camera: CameraLink.Access? = null, val plan: Plan = Plan.TEST, val publicRoot: String? = null) {
     fun roleOf(uid: String?): String? = uid?.let { members[it]?.role }
     companion object {
         @Suppress("UNCHECKED_CAST")
@@ -226,7 +231,7 @@ data class Home(val id: String, val name: String, val owners: List<String>, val 
             val camera = c?.get("addr")?.let { CameraLink.Access(it as String, c["user"] as? String ?: "admin", c["pass"] as? String ?: "",
                 c["serial"] as? String ?: "", c["name"] as? String ?: "Câmera", c["twoLenses"] as? Boolean ?: false) }
             return Home(id, data["name"] as? String ?: "Casa", (data["owners"] as? List<String>).orEmpty(), members, hub?.get("root") as? String,
-                hub?.get("serial") as? String, camera, Plan.from(data["plan"]))
+                hub?.get("serial") as? String, camera, Plan.from(data["plan"]), hub?.get("public") as? String)
         }
     }
 }

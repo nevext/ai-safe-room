@@ -106,6 +106,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -201,6 +202,12 @@ private fun AiVideo(live: Live, view: String, visible: Boolean, modifier: Modifi
     RoomSound(hub, visible && live.listen)
     var frame by remember(view) { mutableStateOf(Kept.get<ImageBitmap>("aiFrame:$view")) }
     var error by remember { mutableStateOf<String?>(null) }
+    var waited by remember { mutableStateOf(false) }
+    LaunchedEffect(frame, visible) {
+        if (!visible || frame != null) { waited = false; return@LaunchedEffect }
+        delay(12_000)
+        if (frame == null) waited = true
+    }
     DisposableEffect(hub, view, visible) {
         if (!visible) return@DisposableEffect onDispose {}
         val video = Mjpeg(hub.videoUrl(view, 1280, 960), onFrame = { jpg ->
@@ -216,10 +223,11 @@ private fun AiVideo(live: Live, view: String, visible: Boolean, modifier: Modifi
             rememberCameraPicture(hub)?.let {
                 Image(it, null, contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.6f)
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
-                Text(if (error != null) "Reconectando…" else "Abrindo a câmera…", color = Color(0xCCFFFFFF), fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 8.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 24.dp)) {
+                if (live.problem == null && !waited) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+                Text(live.problem ?: if (waited) (if (live.away) "A imagem está demorando para chegar de casa" else "A câmera não está nesta rede") else if (error != null) "Reconectando…" else "Abrindo a câmera…",
+                    color = Color(0xCCFFFFFF), fontSize = 12.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = if (live.problem == null && !waited) 8.dp else 0.dp))
             }
         } else {
             Image(img, "Câmera ao vivo", contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -1038,15 +1046,15 @@ fun SystemScreen(live: Live, prefs: android.content.SharedPreferences, onBack: (
         var remoteNote by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
         Text("Ver de fora de casa", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, modifier = Modifier.padding(top = 20.dp))
-        Text("Fora do Wi-Fi de casa, o app tenta este endereço do computador (por exemplo o do Tailscale, 100.x.x.x:8787).",
+        Text("Com o computador ligado em casa, o app acha o endereço sozinho. Este campo é só se você tiver o seu (Tailscale, 100.x.x.x:8787).",
             color = palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(remote, { remote = it }, singleLine = true, modifier = Modifier.weight(1f), placeholder = { Text("100.x.x.x:8787") },
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue))
             TextButton(onClick = {
-                val a = remote.trim().removePrefix("http://").trimEnd('/')
-                if (a.isEmpty()) { prefs.edit().remove("remote").apply(); remoteNote = "Sem endereço de fora."; return@TextButton }
-                val root = "http://" + if (':' in a) a else "$a:8787"
+                if (remote.isBlank()) { prefs.edit().remove("remote").apply(); remoteNote = "Sem endereço de fora."; return@TextButton }
+                val root = Hub.rootOf(remote)
+                remote = root
                 scope.launch {
                     val ok = withContext(Dispatchers.IO) { runCatching { live.hub!!.at(root).screen() }.isSuccess }
                     prefs.edit().putString("remote", root).apply()

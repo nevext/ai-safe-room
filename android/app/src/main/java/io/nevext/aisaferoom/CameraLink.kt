@@ -212,19 +212,58 @@ class CameraLink private constructor(private val context: Context) {
     private fun toggle(id: String, label: String, value: Boolean) =
         JSONObject().put("id", id).put("type", "toggle").put("label", JSONObject().put("pt", label)).put("value", value)
 
+    /**
+     * The camera at the saved address really answers, and it is this house's (same serial). Short timeout: a dead IP
+     * or another phone sitting on it must not look "online".
+     */
+    fun probe(): Boolean {
+        val a = access ?: return false
+        val d = try { Dvrip.open(a.addr, a.user, a.pass) } catch (_: Exception) { return false }
+        return try {
+            val serial = d.request(1020, JSONObject().put("Name", "SystemInfo"), 2500).optJSONObject("SystemInfo")?.optString("SerialNo").orEmpty()
+            a.serial.isEmpty() || serial.isEmpty() || serial.equals(a.serial, ignoreCase = true)
+        } catch (_: Exception) { false } finally { d.close() }
+    }
+
+    private var lookedAt = 0L
+
+    /** Finds this house's camera on the Wi-Fi this phone is on, by serial (the IP may have changed, or this is another LAN). */
+    fun reach(): Boolean {
+        if (probe()) return true
+        val want = access?.serial?.takeIf { it.isNotEmpty() } ?: return false
+        val a = access ?: return false
+        val now = System.currentTimeMillis()
+        if (now - lookedAt < 120_000) return false
+        lookedAt = now
+        for (f in runCatching { Hub.discover(context) }.getOrDefault(emptyList()).filter { it.camera }) {
+            val host = f.root.removePrefix("http://").substringBefore(':')
+            if (f.serial.equals(want, ignoreCase = true)) {
+                remember(a.copy(addr = host)); return probe()
+            }
+            if (f.serial.isNullOrEmpty()) runCatching {
+                val got = Hub.tryCamera(context, host, a.user, a.pass)
+                if (got.serial.equals(want, ignoreCase = true)) { remember(got); return true }
+            }
+        }
+        return probe()
+    }
+
     /** What the screens show, made from the camera alone (the computer is off or busy). */
     fun screenInfo(): JSONObject {
         val a = access ?: throw IOException("o app ainda não conhece a câmera")
-        val controls = controls()   // also proves the camera answers
+        val ok = reach()
+        val now = access ?: a
+        val controls = if (ok) controls() else JSONArray()
         return JSONObject()
-            .put("camera", JSONObject().put("connected", true).put("name", a.name).put("kind", "Câmera").put("serial", a.serial).put("blankPass", a.pass.isEmpty()))
-            .put("lenses", JSONObject().put("count", if (a.twoLenses) 2 else 1))
+            .put("camera", JSONObject().put("connected", ok).put("name", now.name).put("kind", "Câmera").put("serial", now.serial).put("blankPass", now.pass.isEmpty()))
+            .put("lenses", JSONObject().put("count", if (now.twoLenses) 2 else 1))
             .put("ai", JSONObject().put("enabled", false).put("status", "off"))
             .put("controls", controls)
-            .put("ptz", true)
-            .put("cameraPerson", runCatching { person() }.getOrNull() == true)
+            .put("ptz", ok)
+            .put("cameraPerson", if (ok) runCatching { person() }.getOrNull() == true else false)
             .put("protection", JSONObject().put("on", protection))
             .put("phoneOnly", true)
+            .apply { if (!ok) put("problem", "A câmera não está nesta rede") }
     }
 
     companion object {

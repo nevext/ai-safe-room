@@ -79,6 +79,17 @@ export async function accountOf(token, homeId) {
   return who;
 }
 
+/** Grava o endereço de fora da casa (hub.public). Só um dono passa nas regras; o token é o dele. */
+export async function writePublic(homeId, token, url) {
+  const value = url ? { stringValue: url } : { nullValue: null };
+  const r = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/homes/${encodeURIComponent(homeId)}?updateMask.fieldPaths=hub.public`, {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ fields: { hub: { mapValue: { fields: { public: value } } } } }),
+  });
+  return r.status === 200;
+}
+
 /** Ligar este PC a uma casa: só um dono dela (conferido no Firestore com o token dele). */
 export async function ownerOf(token, homeId) {
   const user = await verifyToken(token);

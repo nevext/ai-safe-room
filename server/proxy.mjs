@@ -21,7 +21,8 @@ import { createMeter, createLevel, grade, tips, LEVELS } from './quality.mjs';
 import { watchMotion } from './motion.mjs';
 import { createClips } from './clips.mjs';
 import { createDrive } from './drive.mjs';
-import { accountOf, ownerOf } from './account.mjs';
+import { accountOf, ownerOf, writePublic } from './account.mjs';
+import { startAway } from './away.mjs';
 import { createProfiles } from './perfil.mjs';
 import { loadFaces, createPeople, pose, similarity, outfit, outfitSimilarity, hasColor, SAME_PERSON } from './faces.mjs';
 
@@ -2147,6 +2148,8 @@ const knownKey = (k) => !!deviceOf(k);
 // Quem está pedindo: o próprio PC é dono
 // A conta Google do app (Authorization: Bearer <token do Firebase>): o papel vem da casa no Firestore
 const bearer = (req) => /^Bearer\s+(\S+)$/.exec(req.headers.authorization || '')?.[1];
+// The last owner's token, kept in memory: the tunnel publishes hub.public with it. Never written to disk.
+let ownerToken = null;
 async function who(req, prefixed) {
   if (fromThisPc(req)) return { id: null, name: 'Este computador', role: 'owner' };
   const device = deviceOf(prefixed?.[1]) || deviceOf(cookieKey(req)) || deviceOf(req.headers['x-key']);
@@ -2199,7 +2202,7 @@ function setRole(id, role, hours, me) {
   return { ok: true, ...devicesInfo(me) };
 }
 // O que cada papel pode. Dono: tudo. Convidado: só ver, ouvir e falar.
-const GUEST_OK = new Set(['/api/me', '/api/home', '/api/applog', '/api/screen', '/api/screen/video', '/api/screen/audio', '/api/screen/events', '/api/screen/thumb',
+const GUEST_OK = new Set(['/api/me', '/api/home', '/api/away', '/api/applog', '/api/screen', '/api/screen/video', '/api/screen/audio', '/api/screen/events', '/api/screen/thumb',
   '/api/screen/direct-stream', '/api/state', '/api/snapshot', '/api/talk', '/api/connection', '/api/stream', '/api/audio']);
 const MEMBER_POST_OK = new Set(['/api/applog', '/api/screen/control', '/api/ptz', '/api/talk', '/api/connection', '/api/follow', '/api/daynight']);
 const MEMBER_CONTROLS = new Set(['ircut', 'night', 'light', 'camTrack', 'follow']);
@@ -2225,15 +2228,19 @@ const isLoopback = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(re
 // O próprio PC entra sem senha, mas não uma página de outro site aberta nele (ela mandaria Origin de fora)
 function fromThisPc(req) {
   if (!isLoopback(req)) return false;
+  // The tunnel also connects from this machine. Cloudflare marks those requests; they are phones from outside.
+  if (req.headers['cf-connecting-ip'] || req.headers['cf-ray']) return false;
   const origin = req.headers.origin;
   if (!origin) return true;
   try { return ['127.0.0.1', 'localhost'].includes(new URL(origin).hostname); } catch { return false; }
 }
+// Who is on the other end: through the tunnel the socket is this PC, Cloudflare says the real address
+const clientIp = (req) => (isLoopback(req) && String(req.headers['cf-connecting-ip'] || '').trim()) || req.socket.remoteAddress.replace(/^::ffff:/, '');
 const cookieKey = (req) => /(?:^|;\s*)camkey=([0-9a-f]+)/.exec(req.headers.cookie || '')?.[1];
 // Errou a senha 5 vezes: aquele aparelho espera 1 minuto
 const tries = new Map();
 function login(req, res, password, name) {
-  const ip = req.socket.remoteAddress, t = tries.get(ip) || { n: 0, until: 0 };
+  const ip = clientIp(req), t = tries.get(ip) || { n: 0, until: 0 };
   if (Date.now() < t.until) return json(res, 429, { ok: false, error: 'muitas tentativas; espere 1 minuto' });
   if (!passwordOk(password)) {
     t.n++; if (t.n >= 5) { t.n = 0; t.until = Date.now() + 60000; }
@@ -2242,7 +2249,7 @@ function login(req, res, password, name) {
     return json(res, 401, { ok: false, error: 'senha errada' });
   }
   tries.delete(ip);
-  const d = newDevice(name || 'Navegador', undefined, 0, req.socket.remoteAddress.replace(/^::ffff:/, ''));
+  const d = newDevice(name || 'Navegador', undefined, 0, clientIp(req));
   res.setHeader('set-cookie', `camkey=${d.key}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
   return json(res, 200, { ok: true, key: d.key });
 }
@@ -2250,7 +2257,7 @@ function login(req, res, password, name) {
 // Ninguém precisa saber a senha. Um pedido por aparelho, vale 10 min.
 const requests = new Map();   // id → { id, name, ip, at, status: 'pending' | 'ok' | 'no' }
 function accessRequest(req, name) {
-  const ip = req.socket.remoteAddress.replace(/^::ffff:/, '');
+  const ip = clientIp(req);
   for (const [id, r] of requests) if (r.ip === ip || Date.now() - r.at > 600000) requests.delete(id);
   if (requests.size >= 5) return { ok: false, error: 'pedidos demais agora' };
   const r = { id: crypto.randomBytes(16).toString('hex'), name: String(name || 'Aparelho').slice(0, 40), ip, at: Date.now(), status: 'pending' };
@@ -2421,6 +2428,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (u.pathname === '/api/home/link' && req.method === 'POST') return json(res, 200, await linkHome(req, prefixed, await readBody(req)));
     const me = await who(req, prefixed);
+    if (me?.google && me.role === 'owner' && bearer(req)) ownerToken = bearer(req);
     if (!me) {
       if (u.pathname.startsWith('/api/')) return json(res, 401, { error: 'senha', login: '/api/login' });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -2524,6 +2532,7 @@ const server = http.createServer(async (req, res) => {
       case '/api/privacy': return json(res, 200, req.method === 'POST' ? await setPrivacy((await readBody(req)).on) : { ok: true, ...privacy });
       case '/api/me': return json(res, 200, { ok: true, id: me.id, name: me.name, role: me.role, until: me.until || null });
       case '/api/home': return json(res, 200, { ok: true, homeId: access.homeId || null });
+      case '/api/away': return json(res, 200, { ok: true, url: awayUrl });
       case '/api/devices': return json(res, 200, devicesInfo(me));
       case '/api/devices/remove': return json(res, 200, removeDevice((await readBody(req)).id, me));
       case '/api/devices/role': { const b = await readBody(req); return json(res, 200, setRole(b.id, b.role, b.hours, me)); }
@@ -2579,6 +2588,16 @@ function serveStatic(pathname, res) {
     res.end(data);
   });
 }
+
+let awayUrl = null;
+startAway({
+  port: PORT,
+  bin: path.join(HERE, 'bin', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared'),
+  onUrl: (u) => { awayUrl = u; },
+  getToken: () => ownerToken,
+  getHome: () => access.homeId || null,
+  writePublic,
+});
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`cam-control no PC:     http://127.0.0.1:${PORT}`);

@@ -202,23 +202,43 @@ private fun App(prefs: SharedPreferences, visible: Boolean, theme: String, asked
         val h = live.hub ?: return@LaunchedEffect
         if (!visible) return@LaunchedEffect
         var first = true
+        var sentAway: String? = null
         while (true) {
             val r = withContext(Dispatchers.IO) { runCatching { h.screen() to runCatching { h.activity() }.getOrNull() } }
             r.onSuccess { (info, act) ->
+                val phoneOnly = info.optBoolean("phoneOnly")
+                val camOk = info.optJSONObject("camera")?.optBoolean("connected") == true
+                // The camera isn't on this Wi-Fi: use the computer's internet address (it relays the picture)
+                if (phoneOnly && !camOk) {
+                    val pub = withContext(Dispatchers.IO) { awayRoot(prefs, h) }
+                    if (pub != null) {
+                        live.hub = h.at(pub)
+                        live.away = true
+                        return@LaunchedEffect
+                    }
+                }
+                // At home, remember the computer's internet address for the next time this phone is away
+                if (!phoneOnly) {
+                    val url = withContext(Dispatchers.IO) { runCatching { h.awayUrl() }.getOrNull() }
+                    if (url != null && url != prefs.getString("remote", null)) prefs.edit().putString("remote", url).apply()
+                    val homeId = prefs.getString("homeLinked", null)
+                    if (url != null && url != sentAway && homeId != null && live.owner &&
+                        withContext(Dispatchers.IO) { runCatching { Account.setPublic(homeId, url) }.isSuccess }) sentAway = url
+                }
                 live.info = info
                 // Protection's state on the phone too: without the computer, the camera's own alerts follow it
-                if (!info.optBoolean("phoneOnly")) info.optJSONObject("protection")?.let { CameraLink.current()?.protection = it.optBoolean("on") }
+                if (!phoneOnly) info.optJSONObject("protection")?.let { CameraLink.current()?.protection = it.optBoolean("on") }
                 info.optJSONObject("me")?.optString("role")?.ifEmpty { null }?.let { live.role = it; prefs.edit().putString("role", it).apply() }
                 live.controls = if (live.guest) JSONArray() else info.optJSONArray("controls") ?: JSONArray()
-                live.connected = info.optJSONObject("camera")?.optBoolean("connected") == true
+                live.connected = camOk
                 if (act != null) live.activity = act
-                live.problem = null
+                live.problem = info.optString("problem").ifEmpty { null }
             }.onFailure {
                 if (it is Locked) { if (screen != Screen.Login) screen = Screen.LetIn(h.root); return@LaunchedEffect }
                 // At home it's the Wi-Fi address; away, the one set in Conexão (and back again)
                 val home = prefs.getString("root", null)
-                val other = if (h.root == home) prefs.getString("remote", null) else home
-                if (other != null && withContext(Dispatchers.IO) { runCatching { h.at(other).screen() }.isSuccess }) {
+                val other = if (h.root == home) withContext(Dispatchers.IO) { awayRoot(prefs, h) } else home
+                if (other != null && (other != home || withContext(Dispatchers.IO) { runCatching { h.at(other).screen() }.isSuccess })) {
                     live.hub = h.at(other)
                     live.away = other != home
                     return@LaunchedEffect
@@ -499,4 +519,21 @@ fun rememberCameraPicture(hub: Hub): ImageBitmap? {
         }
     }
     return image
+}
+
+/**
+ * The computer's internet address that answers now: the one kept on this phone, then the one the computer last wrote
+ * in the account (the tunnel's address changes when the computer restarts). Remembers the one that worked.
+ */
+private suspend fun awayRoot(prefs: SharedPreferences, h: Hub): String? {
+    val kept = prefs.getString("remote", null)
+    val saved = runCatching { Account.homes().mapNotNull { it.publicRoot } }.getOrDefault(emptyList())
+    for (r in listOfNotNull(kept).plus(saved).distinct()) {
+        if (r == h.root) continue
+        if (runCatching { h.at(r).screen() }.isSuccess) {
+            if (r != kept) prefs.edit().putString("remote", r).apply()
+            return h.at(r).root
+        }
+    }
+    return null
 }

@@ -119,6 +119,10 @@ class Hub(val root: String, val key: String?) {
     fun log(lines: List<String>) { json("$base/api/applog", JSONObject().put("device", android.os.Build.MODEL).put("lines", JSONArray(lines)).toString(), timeoutMs = 5_000) }
     /** The house this computer belongs to (the account's), and linking it: owners only, or with the computer's password. */
     fun home(): JSONObject = json("$base/api/home")
+    /** The computer's address on the internet (the tunnel), when it has one. Empty until cloudflared is up. */
+    fun awayUrl(): String? = runCatching {
+        json("$base/api/away", timeoutMs = 4_000).optString("url").takeIf { it.startsWith("https://") }
+    }.getOrNull()
     /** The camera's address and login, from the computer (for the house in the account). */
     fun cameraAccess(): CameraLink.Access = json("$base/api/camera/access").let { a ->
         CameraLink.Access(a.getString("addr"), a.optString("user", "admin"), a.optString("pass"), a.optString("serial"), a.optString("name", "Câmera"), a.optBoolean("twoLenses"))
@@ -229,7 +233,7 @@ class Hub(val root: String, val key: String?) {
         json("$base/api/devices/role", JSONObject().put("id", id).put("role", role).put("hours", hours).toString())
 
     /** The same computer at another address (from outside the house), keeping this phone's access. */
-    fun at(otherRoot: String) = Hub(otherRoot, key)
+    fun at(otherRoot: String) = Hub(rootOf(otherRoot), key)
 
     /** Raw bytes of a picture (snapshot, thumbnail). */
     fun bytes(url: String): ByteArray {
@@ -260,6 +264,15 @@ class Hub(val root: String, val key: String?) {
     }
 
     companion object {
+        /** http or https as typed; a bare host gets http and port 8787. */
+        fun rootOf(s: String): String {
+            val raw = s.trim().trimEnd('/')
+            return when {
+                raw.startsWith("https://") || raw.startsWith("http://") -> raw
+                else -> "http://" + if (':' in raw) raw else "$raw:8787"
+            }
+        }
+
         /** Whether the computer itself answers (not the camera standing in for it): quick, for the notifications. */
         fun ping(h: Hub): Boolean = runCatching { json(h.base + "/api/state", timeoutMs = 4_000); true }.getOrDefault(false)
 

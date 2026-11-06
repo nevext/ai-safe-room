@@ -17,8 +17,8 @@ android {
         applicationId = "io.nevext.aisaferoom"
         minSdk = 26
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.3.5"
+        versionCode = 19
+        versionName = "0.3.6"
     }
 
     signingConfigs {

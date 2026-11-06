@@ -195,6 +195,12 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
     var attempt by remember { mutableIntStateOf(0) }
     var aspect by remember { mutableStateOf(1.5f) }
     var stalls by remember { mutableIntStateOf(0) }
+    var waited by remember { mutableStateOf(false) }
+    LaunchedEffect(playing, visible) {
+        if (!visible || playing) { waited = false; return@LaunchedEffect }
+        delay(12_000)
+        if (!playing) waited = true
+    }
     LaunchedEffect(hub, visible, attempt) {
         // The camera's address is kept on the phone: the plain camera is phone and camera only, it doesn't wait for the
         // computer (busy with a game, off). The computer is asked in the background, in case the address changed.
@@ -309,10 +315,12 @@ fun DirectVideo(live: Live, view: String, visible: Boolean, modifier: Modifier =
             (SharedVideo.lastFrame ?: rememberCameraPicture(hub))?.let {
                 Image(it, null, contentScale = if (fit) ContentScale.Fit else ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.6f)
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
-                Text(if (attempt > 0) "Reconectando…" else "Abrindo a câmera…", color = Color(0xCCFFFFFF), fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 8.dp))
+            val why = live.problem ?: if (waited) (if (live.away) "A imagem está demorando para chegar de casa" else "A câmera não está nesta rede") else null
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 24.dp)) {
+                if (why == null) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+                Text(why ?: if (attempt > 0) "Reconectando…" else "Abrindo a câmera…", color = Color(0xCCFFFFFF), fontSize = 12.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(top = if (why == null) 8.dp else 0.dp))
             }
         }
     }
