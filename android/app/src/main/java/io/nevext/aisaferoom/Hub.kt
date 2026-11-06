@@ -58,7 +58,9 @@ class Hub(val root: String, val key: String?) {
             // Every time (it's small): the camera's address or password may have changed, even from another phone
             if (link != null) runCatching {
                 val a = json("$base/api/camera/access")
-                link.remember(CameraLink.Access(a.getString("addr"), a.optString("user", "admin"), a.optString("pass"), a.optString("serial"),
+                // Not a blank over the password this phone has: the computer may have lost it (see connect() there)
+                val pass = a.optString("pass").ifEmpty { link.access?.takeIf { it.serial == a.optString("serial") }?.pass.orEmpty() }
+                link.remember(CameraLink.Access(a.getString("addr"), a.optString("user", "admin"), pass, a.optString("serial"),
                     a.optString("name", "Câmera"), a.optBoolean("twoLenses")))
             }
             if (CameraLink.direct && link?.access != null) runCatching {

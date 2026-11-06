@@ -273,7 +273,8 @@ fun LinkHome(live: Live, prefs: SharedPreferences) {
                 val h = mine.first { it.id == linked }
                 home = h
                 if (h.roleOf(user.uid) == "owner") withContext(Dispatchers.IO) { runCatching { hub.cameraAccess() }.getOrNull() }
-                    ?.takeIf { it != h.camera }?.let { a -> runCatching { Account.setCamera(h, a) } }
+                    // Never a blank over a password the account has (the computer may have lost it; this copy is the way back)
+                    ?.takeIf { it != h.camera && !(it.pass.isEmpty() && !h.camera?.pass.isNullOrEmpty()) }?.let { a -> runCatching { Account.setCamera(h, a) } }
             }
             linked != null -> other = true   // another account's house: ask its owner for an invite
             else -> {

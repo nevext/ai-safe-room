@@ -94,7 +94,7 @@ const PROFILE = (() => {
 // Credenciais comuns de câmera XM/iCSee, testadas em ordem se a informada falhar.
 const COMMON_CREDS = PROFILE.credentials || [['admin', ''], ['admin', 'admin'], ['admin', '123456'], ['admin', 'tlJwpbo6']];
 
-const cam = { addr: null, user: 'admin', pass: '', onvif: null, dvr: null, ptzDir: null, profiles: [], info: {}, snapUri: null, streamUri: null, videoSource: 'V_SRC_000' };
+const cam = { addr: null, user: 'admin', pass: '', wrongPass: false, onvif: null, dvr: null, ptzDir: null, profiles: [], info: {}, snapUri: null, streamUri: null, videoSource: 'V_SRC_000' };
 // A IA (camera-ai) é escolha da pessoa, como na TV: vem desligada e a câmera funciona normal, direto. Ligada, cada
 // recurso (atividades de pessoa e animal, seguir, rostos) também é escolhido. Quem já usava o seguir antes desta
 // chave existir tinha escolhido a IA.
@@ -144,26 +144,43 @@ const attr = (xml, a) => { const m = xml.match(new RegExp(`${a}="([^"]*)"`)); re
 async function connect(addr, user, pass) {
   cam.addr = addr;
   const tries = (user != null) ? [[user, pass || ''], ...COMMON_CREDS] : COMMON_CREDS;
+  // Some cameras answer ONVIF's device information without checking the password. So a login only counts if the
+  // camera's own control (DVRIP) takes it too: otherwise a blank "worked", was saved over the real password, and
+  // every control (password, night, light, turning) said "DVRIP indisponível". Without DVRIP at all (not an XM
+  // camera), the first ONVIF login still counts.
+  let onvifOnly = null;
   for (const [u, p] of tries) {
     const info = await soap(null, `<tds:GetDeviceInformation/>`, u, p);
-    if (info.ok && /Manufacturer/i.test(info.text)) {
-      cam.user = u; cam.pass = p;
-      cam.dvr?.close(); cam.dvr = await dvrip(addr, u, p).catch(e => { console.log('DVRIP indisponível:', e.message); return null; });
-      if (cam.dvr) watchAlarms(cam.dvr);
-      cam.info = {
-        manufacturer: tag(info.text, 'Manufacturer'), model: tag(info.text, 'Model'),
-        firmware: tag(info.text, 'FirmwareVersion'), serial: tag(info.text, 'SerialNumber'),
-      };
-      await loadProfiles();
-      await openProfile();
-      if (activity.at(-1)?.type !== 'online') logActivity('online', 'Câmera online');
-      refreshCameraThumb();   // a foto das listas já fica pronta
-      saveState();
-      const opt = await maybeOptimize();   // otimiza na conexão; no-op se já estiver bom
-      return { ok: true, authUser: u, blankPass: p === '', optimized: opt.applied || false, ...publicState() };
-    }
+    if (!info.ok || !/Manufacturer/i.test(info.text)) continue;
+    let dvr = null, refused = false;
+    try { dvr = await dvrip(addr, u, p); } catch (e) { refused = /recusado/.test(e.message); if (!refused) console.log('DVRIP indisponível:', e.message); }
+    if (refused) { onvifOnly ??= { u, p, info }; continue; }
+    return connected(addr, u, p, info, dvr);
+  }
+  if (onvifOnly) {
+    // Video works, controls don't: keep the password we had (never replace it with a blank that only ONVIF took)
+    const keep = pass && onvifOnly.p !== pass ? pass : onvifOnly.p;
+    console.log(`DVRIP indisponível: a câmera recusou a senha${keep ? ' guardada' : ' vazia'}. Vídeo sim, controles não: confira a senha da câmera.`);
+    return connected(addr, onvifOnly.u, keep, onvifOnly.info, null, true);
   }
   return { ok: false, error: 'ONVIF recusou o login. Informe usuário/senha do app iCSee.' };
+}
+
+async function connected(addr, u, p, info, dvr, wrongPass = false) {
+  cam.user = u; cam.pass = p; cam.wrongPass = wrongPass;
+  cam.dvr?.close(); cam.dvr = dvr;
+  if (cam.dvr) watchAlarms(cam.dvr);
+  cam.info = {
+    manufacturer: tag(info.text, 'Manufacturer'), model: tag(info.text, 'Model'),
+    firmware: tag(info.text, 'FirmwareVersion'), serial: tag(info.text, 'SerialNumber'),
+  };
+  await loadProfiles();
+  await openProfile();
+  if (activity.at(-1)?.type !== 'online') logActivity('online', 'Câmera online');
+  refreshCameraThumb();   // a foto das listas já fica pronta
+  saveState();
+  const opt = await maybeOptimize();   // otimiza na conexão; no-op se já estiver bom
+  return { ok: true, authUser: u, blankPass: p === '' && !wrongPass, wrongPass, optimized: opt.applied || false, ...publicState() };
 }
 
 // Troca a senha da própria câmera (DVRIP ModifyPassword, msg 1488) e reconecta com ela. Sem senha, qualquer um na
@@ -268,7 +285,9 @@ function ffmpegFrame(rtsp) {
 // Sessão DVRIP viva: se a câmera fechou a anterior, loga de novo (uma tentativa por vez).
 let dvrLogin = null;
 async function dvrSession() {
-  if (!cam.dvr) throw new Error('Controle pelo DVRIP indisponível');
+  if (!cam.dvr) throw new Error(cam.wrongPass
+    ? 'a câmera recusou a senha que o app tem: ela foi trocada. Digite a senha da câmera (a do app iCSee) para o app voltar a controlar'
+    : 'a câmera não aceitou o controle agora; tente de novo em alguns segundos');
   if (!cam.dvr.closed) return cam.dvr;
   dvrLogin ??= dvrip(cam.addr, cam.user, cam.pass)
     .then(d => { console.log(`${new Date().toLocaleTimeString('pt-BR')} DVRIP: sessão refeita`); watchAlarms(d); return cam.dvr = d; })
@@ -1985,7 +2004,7 @@ async function screenInfo() {
   return {
     version: SCREEN_VERSION, hub: 'camera-ai',
     camera: { connected: !!cam.addr, name: perfil?.data.name || 'Câmera', kind: PROFILE.name || cam.info.model || null, model: cam.info.model || null,
-      serial: cam.info.serial || null, hosts: cam.addr ? [cam.addr] : [], blankPass: !!cam.addr && cam.pass === '' },
+      serial: cam.info.serial || null, hosts: cam.addr ? [cam.addr] : [], blankPass: !!cam.addr && cam.pass === '' && !cam.wrongPass, wrongPass: !!cam.wrongPass },
     lenses: PROFILE.lenses || null,
     video: HAS_FFMPEG ? { mjpeg: '/api/screen/video', formats: live ? ['ts', 'mjpeg'] : H264 ? ['h264', 'mjpeg'] : ['mjpeg'],
       views: PROFILE.lenses?.layout === 'stacked-vertical' ? ['whole', 'top', 'bottom'] : ['whole'] } : null,
